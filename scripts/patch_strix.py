@@ -1250,6 +1250,29 @@ except Exception:
             p_cmake.write_text(txt)
             print(" -> Patched CMakeLists.txt (Patch 18: alias HIP_FOUND from PYTORCH_FOUND_HIP / hip_FOUND)")
 
+    # Patch 19 (local): fix DFlash speculative-decode dtype crash on gfx1151.
+    # combine_hidden_states() feeds fp32 hidden states (GDN/mamba layers run in
+    # fp32 for stability) into self.model.fc, whose weights are fp16 (the bf16
+    # DFlash checkpoint is cast to model_config.dtype=fp16). F.linear then raises
+    #   RuntimeError: expected mat1 and mat2 to have the same dtype (float != Half)
+    # at the FIRST real decode step (the spec proposal only fires after the first
+    # sampled token). Cast hidden states to the fc weight dtype before the call.
+    p_dflash = Path('vllm/model_executor/models/qwen3_dflash.py')
+    if p_dflash.exists():
+        txt = p_dflash.read_text()
+        target = "self.model.fc(hidden_states)"
+        fixed = "self.model.fc(hidden_states.to(self.model.fc.weight.dtype))"
+        if fixed in txt:
+            print(" -> qwen3_dflash.py already carries Patch 19 (fc dtype cast)")
+        elif target in txt:
+            txt = txt.replace(target, fixed, 1)
+            p_dflash.write_text(txt)
+            print(" -> Patched vllm/model_executor/models/qwen3_dflash.py (Patch 19: cast hidden_states to fc weight dtype)")
+        else:
+            print(" !! Patch 19 target not found in qwen3_dflash.py — DFlash dtype fix NOT applied (source drift?)")
+    else:
+        print(" !! Patch 19: qwen3_dflash.py not found — skipped")
+
     print("Successfully patched vLLM/Environment for Strix Halo.")
 
 if __name__ == "__main__":
