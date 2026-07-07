@@ -154,6 +154,16 @@ RUN export HIP_DEVICE_LIB_PATH=$(find /opt/rocm -type d -name bitcode -print -qu
     uv pip install --no-build-isolation --no-deps -v . && \
     rm -rf /root/.cache/uv /root/.cache/pip /tmp/*
 
+# 8c. Pre-tuned Triton fused-MoE kernel configs for gfx1151, keyed by
+# get_device_name() (Patch 20 stabilizes that to the fixed string
+# "gfx1151" - see patch_strix.py). Without these, MoE experts run through
+# vLLM's untuned WNA16 Triton fallback (~5-6x slower decode than an
+# equivalent CUDA/FlashInfer MoE path measured on a DGX Spark for the
+# same Qwen3.6-35B-A3B checkpoint). Add one file per (E, N, dtype) shape
+# tuned via benchmarks/kernels/benchmark_moe.py --tune; see README.md
+# "Tuning MoE kernel configs" for the exact recipe.
+COPY moe-configs/*.json /opt/venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/configs/
+
 # 8b. vLLM runtime dependencies.
 # vLLM declares deps as `dynamic` in pyproject.toml and loads them from
 # requirements/common.txt + requirements/rocm.txt at build time. Built
