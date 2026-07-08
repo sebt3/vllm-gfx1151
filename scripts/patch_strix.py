@@ -1421,6 +1421,34 @@ def paged_attention_2d_splitkv_decode(
                 txt = txt.replace(old_helpers_anchor, new_helpers_anchor, 1)
                 applied = True
 
+            # _cdiv (plain Python helper, not the @triton.jit cdiv_fn right
+            # below it) lives between has_native_kv_cache_layout() and
+            # cdiv_fn() upstream - a separate insertion point from the block
+            # above, easy to miss when splitting the diff into anchors.
+            old_cdiv_anchor = '''    return (
+        key_cache.stride(0) == key_cache.shape[1:].numel()
+        and value_cache.stride(0) == value_cache.shape[1:].numel()
+    )
+
+
+@triton.jit
+def cdiv_fn(x, y):'''
+            new_cdiv_anchor = '''    return (
+        key_cache.stride(0) == key_cache.shape[1:].numel()
+        and value_cache.stride(0) == value_cache.shape[1:].numel()
+    )
+
+
+def _cdiv(x: int, y: int) -> int:
+    return (x + y - 1) // y
+
+
+@triton.jit
+def cdiv_fn(x, y):'''
+            if old_cdiv_anchor in txt:
+                txt = txt.replace(old_cdiv_anchor, new_cdiv_anchor, 1)
+                applied = True
+
             old_callsite_22 = OLD_CALLSITE_22
             new_callsite_22 = NEW_CALLSITE_22
             if old_callsite_22 in txt:
