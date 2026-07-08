@@ -18,7 +18,7 @@ GFX="${GFX:-gfx1151}"
 #
 # See .research/pytorch-180485-hip-found-regression/FINDINGS.md for the
 # kind of breakage this pin shields against.
-PINNED_TARBALL="therock-dist-linux-${GFX}-${ROCM_MAJOR_VER}.13.0a20260510.tar.gz"
+PINNED_TARBALL="therock-dist-linux-${GFX}-${ROCM_MAJOR_VER}.14.0a20260612.tar.gz"
 ALLOW_LATEST="${ALLOW_LATEST:-0}"
 
 echo "=== Installing TheRock ROCm SDK ($GFX, major version $ROCM_MAJOR_VER) ==="

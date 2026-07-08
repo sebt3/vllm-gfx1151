@@ -1,19 +1,22 @@
-# vllm-awq4-qwen source-build image  -  Ubuntu 26.04 + TheRock ROCm 7.13 nightly + vLLM from source.
+# vllm-awq4-qwen source-build image  -  Ubuntu 26.04 + TheRock ROCm 7.14 nightly + vLLM from source.
 #
-# Builds vLLM 0.20.0+ against TheRock ROCm 7.13 nightly for AMD Strix Halo
-# (gfx1151 / RDNA 3.5). Target model: cyankiwi/Qwen3.6-27B-AWQ-INT4
-# (compressed-tensors W4A16, group_size 32, vision tower preserved BF16).
+# Builds vLLM (main HEAD, 2026-07-08) against TheRock ROCm 7.14 nightly for
+# AMD Strix Halo (gfx1151 / RDNA 3.5). Originally targeted the dense model
+# cyankiwi/Qwen3.6-27B-AWQ-INT4 (compressed-tensors W4A16, group_size 32,
+# vision tower preserved BF16); also runs the MoE Qwen3.6-35B-A3B checkpoints.
 #
-# Why this differs from vllm-qwen (BF16):
-#   - vLLM v0.20.0 (released 2026-04-23) is the first stable cut adding
+# *** 2026-07-08: bumped off the v0.20.0 tag, patches disabled ***
+# See step 7 below ("PATCHES-DISABLED") for why and what's left to do.
+#
+# Why this differed from vllm-qwen (BF16), historically:
+#   - vLLM v0.20.0 (released 2026-04-23) was the first stable cut adding
 #     gfx1150/1151/1201 device IDs AND PR #36505 which routes AWQ
 #     through AWQMarlinLinearMethod -> ConchLinearKernel on ROCm:
 #     measured +57% prefill / +73% decode on gfx1151 vs the legacy
-#     ops.awq_gemm path. We pin VLLM_COMMIT to the v0.20.0 release tag
-#     by default; .env can override.
+#     ops.awq_gemm path. That's now folded into whatever HEAD carries.
 #   - Wheel index switched from rocm.prereleases (frozen at 7.12.0rc1)
-#     to rocm.nightlies.amd.com/v2-staging/gfx1151/ which serves the
-#     live 7.13.0a daily set (matched torch/torchvision/torchaudio/triton).
+#     to rocm.nightlies.amd.com/v2-staging/gfx1151/, matched daily set
+#     (torch/torchvision/torchaudio/triton), currently pinned to 20260612.
 #
 # What we DON'T build:
 #   - AITER custom build  : SKIPPED. Disabled at runtime via
@@ -53,8 +56,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       procps \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. TheRock ROCm SDK -> /opt/rocm. The install script resolves the latest
-# 7.13.0a nightly tarball at build time (today: 7.13.0a20260426).
+# 2. TheRock ROCm SDK -> /opt/rocm. Pinned to the latest tarball AMD had
+# published on rocm.nightlies.amd.com at the time of this bump: 7.14.0a20260612
+# (2026-07-08 bump: was 7.13.0a20260510 — see PATCHES-DISABLED note below).
 WORKDIR /tmp
 ARG ROCM_MAJOR_VER=7
 ARG GFX=gfx1151
@@ -76,18 +80,17 @@ RUN uv venv /opt/venv --python 3.12 && \
       setuptools==79.0.1
 
 # 4. PyTorch + triton from the AMD v2-staging gfx1151 nightly index, all four
-# pinned to the verified-working set captured 2026-05-10. Triton is listed
-# explicitly so it cannot float independently of torch (it is normally a
-# transitive dep). The +rocm7.13.0a20260510 local-version suffix locks the
-# wheel to this exact daily snapshot. To refresh: bump all four together to
-# a matched daily AND verify cmake `find_package(Torch)` still sets
-# HIP_FOUND on the new torch (or ensure Patch 18 is still wired); see
-# .research/pytorch-180485-hip-found-regression/FINDINGS.md.
+# pinned to the matched daily set for 2026-06-12 (2026-07-08 bump from
+# 2026-05-10). Triton is listed explicitly so it cannot float independently
+# of torch (it is normally a transitive dep). The +rocm7.14.0a20260612
+# local-version suffix locks the wheel to this exact daily snapshot.
+# NOT YET VERIFIED against Patch 18's HIP_FOUND workaround or any other
+# patch in patch_strix.py — see PATCHES-DISABLED note at step 7.
 RUN uv pip install --pre \
-      torch==2.13.0a0+rocm7.13.0a20260510 \
-      torchvision==0.27.0a0+rocm7.13.0a20260510 \
-      torchaudio==2.11.0+rocm7.13.0a20260510 \
-      triton==3.7.0+git31234c9b.rocm7.13.0a20260510 \
+      torch==2.13.0a0+rocm7.14.0a20260612 \
+      torchvision==0.27.0+rocm7.14.0a20260612 \
+      torchaudio==2.11.0+rocm7.14.0a20260612 \
+      triton==3.7.0+gitb4e20bbe.rocm7.14.0a20260612 \
       --index-url https://rocm.nightlies.amd.com/v2-staging/gfx1151/ && \
     rm -rf /root/.cache/uv /root/.cache/pip
 
@@ -105,13 +108,17 @@ RUN uv pip install \
 # falls back to the slow legacy ops.awq_gemm.
 RUN uv pip install conch-triton-kernels==1.3
 
-# 7. Clone vLLM and apply the Strix Halo patch bundle.
-# Default pin: v0.20.0 release tag (2026-04-23) which includes:
-#   - PR #36505: AWQMarlin on ROCm (+57% prefill / +73% decode for AWQ)
-#   - RDNA 3.5/4 device-ID detection (gfx1150/1151/1201)
-#   - Initial GDN attention for Qwen3-Next / Qwen3.5
-# Override via build-arg if you need a different sha or tracking HEAD.
-ARG VLLM_COMMIT=v0.20.0
+# 7. Clone vLLM. Pinned to vllm-project/vllm main HEAD as of 2026-07-08
+# (was the v0.20.0 release tag, 2026-04-23). Bump reason: PR #45413
+# (merged 2026-06-15) replaces the per-model streaming reasoning/tool-call
+# parsers with a unified O(n)-guaranteed engine. v0.20.0 predates that fix,
+# and the old parsers degrade to O(n²) when a single decode step delivers
+# multiple tokens (speculative decoding / MTP) - measured ~5x decode
+# slowdown on gfx1151 when --reasoning-parser and --enable-auto-tool-choice
+# are both active together with MTP. See think/vllm session notes
+# (2026-07-08) in the sibling kydah/home repo for the full diagnosis.
+# Override via build-arg if you need a different sha.
+ARG VLLM_COMMIT=7c67da967f5f9a744fc5f6260918523fc4777417
 RUN git clone https://github.com/vllm-project/vllm.git /opt/vllm
 WORKDIR /opt/vllm
 RUN if [ -n "$VLLM_COMMIT" ]; then \
@@ -121,8 +128,29 @@ RUN if [ -n "$VLLM_COMMIT" ]; then \
       echo "Tracking vLLM HEAD: $(git rev-parse --short HEAD)"; \
     fi
 
+# PATCHES-DISABLED (2026-07-08): patch_strix.py is copied into the image
+# for reference but deliberately NOT run this build. All 19-20 patches
+# were written against the v0.20.0 tag; against a ~2.5-month-newer vLLM
+# HEAD several will likely fail to apply (file moves, renamed functions/
+# classes) and a couple may no longer be needed at all (e.g. Patch 13/14
+# DFlash cherry-picks, if upstream merged them by now).
+#
+# RISK, not just perf: Patch 18 was a hard *build* fix (CMake HIP_FOUND
+# not set by newer PyTorch's LoadHIP.cmake, upstream PyTorch PR #180485).
+# If vLLM HEAD's own CMakeLists.txt hasn't since adapted to that PyTorch
+# change independently, step 8 below (`uv pip install .`) may fail outright
+# with "Can't find CUDA or HIP installation" rather than just building an
+# unoptimized image. If the GH Actions build fails there, re-enable at
+# least Patch 18 (or inline its CMakeLists.txt shim) first before touching
+# anything else.
+#
+# Re-enabling the rest of the patches is a separate triage pass: exec into
+# a running pod from THIS image,
+# check which of patch_strix.py's edits still apply cleanly against the
+# installed vllm source, fix/drop/replace as needed, then flip this back
+# to `RUN python /opt/vllm/patch_strix.py` and rebuild.
 COPY scripts/patch_strix.py /opt/vllm/patch_strix.py
-RUN python /opt/vllm/patch_strix.py
+# RUN python /opt/vllm/patch_strix.py
 
 # 7b. pkg-config  -  required by ROCm 7.13's rocm_smi-config.cmake which
 # vLLM's find_package(Torch) → Caffe2 → LoadHIP chain pulls in. Kept as
