@@ -812,6 +812,28 @@ def has_native_kv_cache_layout('''
                 scale=sm_scale,
                 output=output,
                 max_seq_len=max_seq_len,
+                # Patch 22 fix (2026-07-08, post alpha.5): force a fixed
+                # split count instead of letting paged_attention_2d_splitkv_decode
+                # call _get_num_splits(). Under FULL CUDA graph capture, this
+                # Python-level branch runs exactly once - at capture time,
+                # with whatever dummy/warmup max_seq_len was in scope then -
+                # and the resulting actual_max_splits (the kernel GRID SIZE,
+                # i.e. how many split-programs get launched) is frozen into
+                # the graph forever after. Real requests replay that same
+                # grid regardless of their actual context length, so the
+                # heuristic's dependence on max_seq_len is silently dead
+                # under cudagraphs (confirmed: zero "JIT compilation" log
+                # lines for kernel_paged_attention_2d_splitkv ever appeared
+                # in production, meaning actual_max_splits landed on 1 at
+                # capture time and the code took the plain-kernel fallback
+                # branch inside paged_attention_2d_splitkv_decode instead).
+                # This is safe to fix by forcing a constant: the kernel body
+                # itself reads the real per-request seq_len from a runtime
+                # tensor (not baked into the graph), so a split-program
+                # assigned a KV range past the actual seq_len just processes
+                # ~0 tokens - no correctness impact, only a small constant
+                # overhead for short sequences.
+                actual_max_splits=_MAX_SPLITS,
                 max_num_splits=_MAX_SPLITS,
                 query_start_loc=query_start_loc,
                 filter_by_query_len=True,
