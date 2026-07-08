@@ -33,8 +33,17 @@ vLLM #36505 (AWQMarlin → ConchLinearKernel, `conch-triton-kernels`) :
   gfx1151.
 - **Flash-Attention** compilée : sautée — régression ViT sur gfx1151. On passe
   par TRITON_ATTN / AOTriton.
-- **HIP graphs** : à désactiver au runtime (`--enforce-eager`) — freeze driver
-  documenté (vLLM #32180).
+
+## HIP graphs (`--enforce-eager`)
+
+Historiquement désactivées au runtime — freeze driver documenté (vLLM #32180).
+**Ne reproduit plus** sur le tarball TheRock ROCm 7.13 nightly épinglé ici :
+capture propre en ~8s, testé le 2026-07-08 sur Qwen3.6-35B-A3B-AWQ. Gain
+mesuré **~5x en decode single-stream** (5-6 tok/s → 20-32 tok/s selon la
+longueur de génération) — c'était le vrai goulot, pas les kernels MoE.
+Retirer `--enforce-eager` par défaut ; ne le remettre que si le freeze
+réapparaît sur un tarball ROCm différent (pas encore revérifié sur le modèle
+dense 27B ni en usage multi-requêtes concurrentes).
 
 ## Versions épinglées (rafraîchir en bloc)
 
@@ -140,7 +149,7 @@ déploiement. Extraits load-bearing à reprendre :
 # Flags serve
 --attention-backend ROCM_ATTN          # requis pour DFlash non-causal (PR #40176)
 --mm-encoder-attn-backend TRITON_ATTN  # TORCH_SDPA => NaN sur images
---enforce-eager                        # HIP graph capture freeze gfx1151
+# PAS de --enforce-eager par défaut — voir section "HIP graphs" ci-dessus
 --reasoning-parser qwen3
 --tool-call-parser qwen3_coder --enable-auto-tool-choice
 --speculative-config '{"method":"dflash","model":"z-lab/Qwen3.6-27B-DFlash","num_speculative_tokens":8}'
