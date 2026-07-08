@@ -95,13 +95,17 @@ RUN uv pip install --pre \
     rm -rf /root/.cache/uv /root/.cache/pip
 
 # 5. Build tool deps for the vLLM native build (all pinned).
+# setuptools-rust added 2026-07-08: new build-time requirement on the
+# vLLM HEAD pin (v0.20.0 didn't need it) - not declared in vLLM's own
+# build-system.requires, so it must be pre-installed for --no-build-isolation.
 RUN uv pip install \
       cmake==4.3.2 \
       ninja==1.13.0 \
       numpy==2.4.4 \
       setuptools-scm==10.0.5 \
       scikit-build-core==0.12.2 \
-      pybind11==3.0.4
+      pybind11==3.0.4 \
+      setuptools-rust==1.13.0
 
 # 6. Conch Triton kernels  -  required by vLLM's AWQMarlin-on-ROCm path
 # selected via choose_mp_linear_kernel (PR #36505). Without this, AWQ
