@@ -90,7 +90,7 @@ RUN uv pip install --pre \
       torch==2.13.0a0+rocm7.14.0a20260612 \
       torchvision==0.27.0+rocm7.14.0a20260612 \
       torchaudio==2.11.0+rocm7.14.0a20260612 \
-      triton==3.7.0+gitb4e20bbe.rocm7.14.0a20260612 \
+      triton==3.7.1+git5d6048aa.rocm7.14.0a20260612 \
       --index-url https://rocm.nightlies.amd.com/v2-staging/gfx1151/ && \
     rm -rf /root/.cache/uv /root/.cache/pip
 
