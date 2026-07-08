@@ -132,6 +132,16 @@ RUN if [ -n "$VLLM_COMMIT" ]; then \
       echo "Tracking vLLM HEAD: $(git rev-parse --short HEAD)"; \
     fi
 
+# Build-compat fix (2026-07-08, unrelated to gfx1151/Strix patches): new
+# csrc/spinloop.cpp (didn't exist in v0.20.0) does `#include <mwaitxintrin.h>`
+# directly. ROCm 7.14's bundled clang (23) hard-errors on that - its copy of
+# mwaitxintrin.h guards itself with `#error "Never use <mwaitxintrin.h>
+# directly; include <x86intrin.h> instead."`. GCC doesn't have this guard,
+# so this only breaks Clang-toolchain ROCm builds like ours. Swap to the
+# umbrella header, which still exposes the same _mm_monitorx/_mm_mwaitx
+# intrinsics the file uses.
+RUN sed -i 's/#include <mwaitxintrin.h>/#include <x86intrin.h>/' csrc/spinloop.cpp
+
 # PATCHES-DISABLED (2026-07-08): patch_strix.py is copied into the image
 # for reference but deliberately NOT run this build. All 19-20 patches
 # were written against the v0.20.0 tag; against a ~2.5-month-newer vLLM
