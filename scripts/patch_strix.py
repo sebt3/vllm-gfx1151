@@ -599,6 +599,59 @@ except Exception:
         else:
             print(" -> vllm/platforms/rocm.py already carries Patch 20 (or was already patched)")
 
+    # Patch 21 (local, added 2026-07-08): same amdsmi-mock landmine as
+    # Patch 20, different call site. get_device_total_memory() tries
+    # amdsmi first and falls back to torch.cuda.get_device_properties()
+    # only on exception — but amdsmi is fully mocked (Patch 1.5), and
+    # MagicMock calls/getattr/getitem never raise, so the amdsmi path
+    # "succeeds" and returns a MagicMock instead of an int. That reaches
+    # vllm/engine/arg_utils.py's get_batch_defaults(), which crashes the
+    # API server at startup with:
+    #   TypeError: '>=' not supported between instances of 'MagicMock'
+    #   and 'int'
+    # (device_memory >= 70 * GiB_bytes). Fix: skip amdsmi entirely and go
+    # straight to the torch.cuda fallback, which Patch 10's ROCM-21812
+    # VRAM shim already patches to report real APU GTT memory correctly.
+    p_rocm_devmem = Path('vllm/platforms/rocm.py')
+    if p_rocm_devmem.exists():
+        txt = p_rocm_devmem.read_text()
+        old_get_device_total_memory = (
+            "    def get_device_total_memory(cls, device_id: int = 0) -> int:\n"
+            "        # Query total VRAM via amdsmi so we don't initialize a HIP context in\n"
+            "        # the calling process. torch.cuda.get_device_properties() creates a\n"
+            "        # HIP context, which makes vLLM fall back from `fork` to `spawn` for\n"
+            "        # worker processes. Keeping this query context-free preserves `fork`\n"
+            "        # where it is otherwise valid (e.g. out-of-tree models registered in\n"
+            "        # the parent process).\n"
+            "        try:\n"
+            "            physical_device_id = cls.device_id_to_physical_device_id(device_id)\n"
+            "            return _query_total_memory_from_amdsmi(physical_device_id)\n"
+            "        except Exception as e:\n"
+            "            logger.debug(\"Failed to get total memory via amdsmi: %s\", e)\n"
+            "            logger.warning_once(\n"
+            "                \"Failed to get total memory via amdsmi, falling back to \"\n"
+            "                \"torch.cuda. This will initialize CUDA.\"\n"
+            "            )\n"
+            "        return torch.cuda.get_device_properties(device_id).total_memory\n"
+        )
+        new_get_device_total_memory = (
+            "    def get_device_total_memory(cls, device_id: int = 0) -> int:\n"
+            "        # Patch 21 (Strix Halo): amdsmi is mocked (Patch 1.5) and never\n"
+            "        # raises, so the amdsmi path below would silently return a\n"
+            "        # MagicMock instead of int, crashing get_batch_defaults() in\n"
+            "        # arg_utils.py. Skip straight to the torch.cuda fallback (Patch 10\n"
+            "        # patches it to report real APU GTT memory).\n"
+            "        return torch.cuda.get_device_properties(device_id).total_memory\n"
+        )
+        if old_get_device_total_memory in txt:
+            txt = txt.replace(old_get_device_total_memory, new_get_device_total_memory, 1)
+            p_rocm_devmem.write_text(txt)
+            print(" -> Patched vllm/platforms/rocm.py (Patch 21: get_device_total_memory skips amdsmi, uses torch.cuda fallback directly)")
+        elif "def get_device_total_memory" in txt and "Patch 21" not in txt:
+            print(" !! Patch 21 target not found verbatim in vllm/platforms/rocm.py — get_device_total_memory NOT patched (source drift?)")
+        else:
+            print(" -> vllm/platforms/rocm.py already carries Patch 21 (or was already patched)")
+
     print("Successfully patched vLLM/Environment for Strix Halo.")
 
 if __name__ == "__main__":
