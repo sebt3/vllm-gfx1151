@@ -142,29 +142,23 @@ RUN if [ -n "$VLLM_COMMIT" ]; then \
 # intrinsics the file uses.
 RUN sed -i 's/#include <mwaitxintrin.h>/#include <x86intrin.h>/' csrc/spinloop.cpp
 
-# PATCHES-DISABLED (2026-07-08): patch_strix.py is copied into the image
-# for reference but deliberately NOT run this build. All 19-20 patches
-# were written against the v0.20.0 tag; against a ~2.5-month-newer vLLM
-# HEAD several will likely fail to apply (file moves, renamed functions/
-# classes) and a couple may no longer be needed at all (e.g. Patch 13/14
-# DFlash cherry-picks, if upstream merged them by now).
-#
-# RISK, not just perf: Patch 18 was a hard *build* fix (CMake HIP_FOUND
-# not set by newer PyTorch's LoadHIP.cmake, upstream PyTorch PR #180485).
-# If vLLM HEAD's own CMakeLists.txt hasn't since adapted to that PyTorch
-# change independently, step 8 below (`uv pip install .`) may fail outright
-# with "Can't find CUDA or HIP installation" rather than just building an
-# unoptimized image. If the GH Actions build fails there, re-enable at
-# least Patch 18 (or inline its CMakeLists.txt shim) first before touching
-# anything else.
-#
-# Re-enabling the rest of the patches is a separate triage pass: exec into
-# a running pod from THIS image,
-# check which of patch_strix.py's edits still apply cleanly against the
-# installed vllm source, fix/drop/replace as needed, then flip this back
-# to `RUN python /opt/vllm/patch_strix.py` and rebuild.
+# PATCHES RE-ENABLED (2026-07-08): retriaged patch_strix.py against this
+# vLLM HEAD (dry-run against a clone pinned to the same commit). Removed
+# Patch 13 (PR #40176 non-causal attention: fully native upstream now),
+# Patch 14a/14c/14d (PR #40898 DFlash SWA: upstream's own
+# _resolve_layer_attention() covers pure-SWA/pure-full drafters and the
+# gpu_model_runner +1 shift natively, but still rejects MIXED sliding+full
+# layer_types with NotImplementedError — see the Patch 14 docstring in
+# patch_strix.py for why that gap needs real engine work, not a string
+# patch, and isn't blocking since think/vllm defaults to speculative_method
+# = mtp, not dflash), Patch 15 (chat_template_kwargs: native upstream,
+# was silently re-injecting a dead duplicate field), and Patch 17
+# (atomicAdd guard: native upstream with a tighter ROCm-version gate, and
+# the file moved to csrc/libtorch_stable/quantization/gptq/compat.cuh).
+# Kept 14b (algos.py SWA config preservation — harmless, still useful).
+# All 16 remaining patches applied cleanly in the dry run.
 COPY scripts/patch_strix.py /opt/vllm/patch_strix.py
-# RUN python /opt/vllm/patch_strix.py
+RUN python /opt/vllm/patch_strix.py
 
 # 7b. pkg-config  -  required by ROCm 7.13's rocm_smi-config.cmake which
 # vLLM's find_package(Torch) → Caffe2 → LoadHIP chain pulls in. Kept as
