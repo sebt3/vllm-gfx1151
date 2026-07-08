@@ -5,8 +5,10 @@
 # cyankiwi/Qwen3.6-27B-AWQ-INT4 (compressed-tensors W4A16, group_size 32,
 # vision tower preserved BF16); also runs the MoE Qwen3.6-35B-A3B checkpoints.
 #
-# *** 2026-07-08: bumped off the v0.20.0 tag, patches disabled ***
-# See step 7 below ("PATCHES-DISABLED") for why and what's left to do.
+# *** 2026-07-08: bumped off the v0.20.0 tag; patches retriaged and
+# re-enabled (see step 7, "PATCHES RE-ENABLED"); ROCm/torch/triton pin
+# rolled back same day from 20260612 to 20260608 after a torch.cuda
+# .is_available() GPF bisected to that window (see step 2 comment). ***
 #
 # Why this differed from vllm-qwen (BF16), historically:
 #   - vLLM v0.20.0 (released 2026-04-23) was the first stable cut adding
@@ -16,7 +18,7 @@
 #     ops.awq_gemm path. That's now folded into whatever HEAD carries.
 #   - Wheel index switched from rocm.prereleases (frozen at 7.12.0rc1)
 #     to rocm.nightlies.amd.com/v2-staging/gfx1151/, matched daily set
-#     (torch/torchvision/torchaudio/triton), currently pinned to 20260612.
+#     (torch/torchvision/torchaudio/triton), currently pinned to 20260608.
 #
 # What we DON'T build:
 #   - AITER custom build  : SKIPPED. Disabled at runtime via
@@ -56,9 +58,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       procps \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. TheRock ROCm SDK -> /opt/rocm. Pinned to the latest tarball AMD had
-# published on rocm.nightlies.amd.com at the time of this bump: 7.14.0a20260612
-# (2026-07-08 bump: was 7.13.0a20260510 — see PATCHES-DISABLED note below).
+# 2. TheRock ROCm SDK -> /opt/rocm. Pinned to 7.14.0a20260608 (2026-07-08
+# afternoon: rolled back from 20260612 after bisecting a torch.cuda
+# .is_available() GPF in libhsa-runtime64.so.1 down to a pip-install
+# bisection — 20260608 clean, 20260609 has no linux wheel, 20260610 is
+# missing from the index entirely, 20260611 reproduces the crash. Note:
+# at *runtime* the Python process actually loads the ROCm libs bundled
+# in the pip `rocm-sdk-core`/`rocm-sdk-libraries-gfx1151` wheels (RPATH
+# wins over LD_LIBRARY_PATH), not this tarball — this install is mainly
+# for headers/libs at vLLM's native-extension build time below. Keep
+# both pins on the same date to avoid build/runtime ROCm version drift.
 WORKDIR /tmp
 ARG ROCM_MAJOR_VER=7
 ARG GFX=gfx1151
@@ -80,17 +89,18 @@ RUN uv venv /opt/venv --python 3.12 && \
       setuptools==79.0.1
 
 # 4. PyTorch + triton from the AMD v2-staging gfx1151 nightly index, all four
-# pinned to the matched daily set for 2026-06-12 (2026-07-08 bump from
-# 2026-05-10). Triton is listed explicitly so it cannot float independently
-# of torch (it is normally a transitive dep). The +rocm7.14.0a20260612
-# local-version suffix locks the wheel to this exact daily snapshot.
-# NOT YET VERIFIED against Patch 18's HIP_FOUND workaround or any other
-# patch in patch_strix.py — see PATCHES-DISABLED note at step 7.
+# pinned to the matched daily set for 2026-06-08 (2026-07-08 afternoon
+# rollback from 2026-06-12 — see the ROCm SDK comment above for why).
+# Triton is listed explicitly so it cannot float independently of torch
+# (it is normally a transitive dep). The exact git hash in the triton
+# version is NOT interchangeable across dates — read it off
+# torch's own METADATA (`Requires-Dist: triton==...`) for the target
+# date rather than reusing the previous date's hash.
 RUN uv pip install --pre \
-      torch==2.13.0a0+rocm7.14.0a20260612 \
-      torchvision==0.27.0+rocm7.14.0a20260612 \
-      torchaudio==2.11.0+rocm7.14.0a20260612 \
-      triton==3.7.1+git5d6048aa.rocm7.14.0a20260612 \
+      torch==2.13.0a0+rocm7.14.0a20260608 \
+      torchvision==0.27.0+rocm7.14.0a20260608 \
+      torchaudio==2.11.0+rocm7.14.0a20260608 \
+      triton==3.7.0+git88b227e2.rocm7.14.0a20260608 \
       --index-url https://rocm.nightlies.amd.com/v2-staging/gfx1151/ && \
     rm -rf /root/.cache/uv /root/.cache/pip
 
