@@ -47,6 +47,7 @@ ARG GFX=gfx1151
 # the HIP runtime, libgoogle-perftools4 for the tcmalloc LD_PRELOAD below).
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl git \
+      python3 python3-pip python3-venv \
       libatomic1 libnuma-dev libgomp1 libelf1t64 \
       libdrm-dev zlib1g-dev libssl-dev \
       libgoogle-perftools4 \
