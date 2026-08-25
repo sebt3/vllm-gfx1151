@@ -81,8 +81,20 @@ Pour bumper :
    nouveau Release, et `VLLM_TAG` (étape 6) vers le même tag vLLM que
    `stack-torch-gfx1151` a construit, pour que les `requirements/*.txt`
    récupérés matchent effectivement le wheel installé.
-3. `THEROCK_RUN_ID` (étape 2) suit le tag `therock-7.14` — à changer
-   seulement si `stack-torch-gfx1151` bump son propre run ROCm officiel.
+3. `ROCM_DIST_URL` (étape 2) pointe vers le tarball ROCm officiel sur
+   `repo.amd.com/rocm/tarball-multi-arch/` (le dépôt stable AMD, pas un
+   bucket CI) — à changer seulement si `stack-torch-gfx1151` bump sa
+   propre version ROCm. **Ne pas repasser par `install_rocm_from_artifacts
+   .py --run-id` de `ROCm/TheRock`** : testé le 2026-08-25, les artefacts
+   bruts par composant liés à un run CI précis semblent avoir une
+   rétention très courte (fonctionnait pour `stack-torch-gfx1151` le
+   21-22 août, disparu le 25) — confirmé en listant directement le bucket
+   S3 `therock-ci-artifacts`. Le canal nightly alternatif
+   (`rocm.nightlies.amd.com`/`therock-nightly-tarball`) est encore pire :
+   il s'arrête de publier des builds gfx1151 après le 2026-06-08, supplanté
+   depuis par le mécanisme par run-id. `repo.amd.com` (le miroir apt/yum
+   ROCm) est le seul des trois canaux hébergés par AMD qui semble fait
+   pour durer.
 
 ## Secrets GitHub Actions requis
 

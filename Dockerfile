@@ -15,13 +15,15 @@
 # from bitserv-ai/_gfx115x_ applied (see that repo's patches/). This image
 # does not build anything — it only assembles.
 #
-# ROCm 7.14 runtime comes directly from AMD's own official TheRock CI
-# artifacts (not from sebt3/therock-gfx1151): that repo's 3 local patches
-# only fix TheRock's own build *process*, not any library's runtime
-# behavior, so a vanilla official build is ABI-identical for our purposes
-# — and as of 2026-08-25 therock-gfx1151 hasn't finished a full build
-# anyway (math-libs, esp. hipBLASLt codegen, needs more resumed CI runs
-# than it's had). Revisit once a real behavior-changing patch exists.
+# ROCm 7.14 runtime comes from AMD's stable release repo (repo.amd.com,
+# not sebt3/therock-gfx1151): that repo's 3 local patches only fix
+# TheRock's own build *process*, not any library's runtime behavior, so a
+# vanilla official build is ABI-identical for our purposes — and as of
+# 2026-08-25 therock-gfx1151 hasn't finished a full build anyway
+# (math-libs, esp. hipBLASLt codegen, needs more resumed CI runs than it's
+# had). Revisit once a real behavior-changing patch exists. Also
+# deliberately not using ROCm/TheRock's own CI-run artifacts (see step 2
+# comment) — those turned out to have very short retention.
 #
 # AITER is enabled by default here (VLLM_ROCM_USE_AITER=1 + granular
 # flags) — this is the thing being tested by this rewrite. The previous
@@ -39,8 +41,7 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 ARG STACK_TORCH_TAG=0.1.0
-ARG THEROCK_RUN_ID=29052575219
-ARG GFX=gfx1151
+ARG ROCM_DIST_URL=https://repo.amd.com/rocm/tarball-multi-arch/therock-dist-linux-gfx1151-7.14.0.tar.gz
 
 # 1. Runtime system deps only — nothing compiles in this image, so no
 # build-essential/cmake/ninja/pkg-config. Same list as the old image's
@@ -55,38 +56,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       procps \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. ROCm 7.14 runtime for gfx1151, straight from AMD's official TheRock CI
-# artifacts — the exact same mechanism stack-torch-gfx1151 itself uses to
-# fetch its build-time ROCm (see that repo's .github/workflows/build.yml,
-# step "Fetch official ROCm 7.14 SDK"). THEROCK_RUN_ID pins the official
-# CI run that produced the therock-7.14 tag commit (418cd5f) for gfx1151.
-# Excludes components vLLM inference never touches at *fetch* time
-# (rocprofiler-*, rocalution, rocwmma, hiptensor, mpi, hipdnn, rocdecode,
-# rocjpeg) — narrower than the old image's full generic TheRock tarball.
+# 2. ROCm 7.14 runtime for gfx1151, from AMD's stable release repo
+# (repo.amd.com/rocm/tarball-multi-arch — the actual apt/yum ROCm package
+# mirror, not a CI staging bucket). Dated 2026-07-15, matching the
+# therock-7.14 GitHub tag exactly.
 #
-# GITHUB_TOKEN mounted as a build secret (not ENV/ARG — never lands in a
-# layer): install_rocm_from_artifacts.py resolves the run via GitHub's
-# REST API before touching S3, and unauthenticated requests get rate-
-# limited to the point of silently returning zero matching artifacts
-# (hit this on 2026-08-25 — a bare GH Actions step has an ambiently
-# authenticated `gh` CLI for free, a Docker build container doesn't).
+# 2026-08-25: originally tried install_rocm_from_artifacts.py pinned to
+# the specific ROCm/TheRock CI run stack-torch-gfx1151 built against
+# (29052575219) — worked for them on 08-21/22, gone 3 days later (that
+# run's raw per-component artifacts on s3://therock-ci-artifacts had
+# vanished, confirmed directly against the bucket; presumably short
+# retention on CI-run-scoped artifacts, not meant for later reuse). The
+# other AMD-hosted nightly channel (rocm.nightlies.amd.com /
+# therock-nightly-tarball) stops publishing gfx1151 builds after
+# 2026-06-08 — superseded, not a viable fallback either. repo.amd.com is
+# the one AMD-hosted location that's actually meant to be durable.
 WORKDIR /tmp
-RUN --mount=type=secret,id=GITHUB_TOKEN \
-    export GITHUB_TOKEN="$(cat /run/secrets/GITHUB_TOKEN 2>/dev/null || true)" && \
-    pip3 install --break-system-packages --no-cache-dir boto3 pyzstd && \
-    git clone --depth 1 --branch therock-7.14 --filter=blob:none --sparse \
-      https://github.com/ROCm/TheRock.git /tmp/therock-tools && \
-    git -C /tmp/therock-tools sparse-checkout set build_tools cmake && \
-    python3 /tmp/therock-tools/build_tools/install_rocm_from_artifacts.py \
-      --run-id "${THEROCK_RUN_ID}" \
-      --run-github-repo ROCm/TheRock \
-      --amdgpu-family "${GFX}" \
-      --no-rocdecode --no-rocjpeg \
-      --no-rocprofiler-sdk --no-rocprofiler-compute --no-rocprofiler-systems --no-rocprofiler-systems-examples \
-      --no-rocalution --no-rocwmma --no-hiptensor \
-      --no-mpi --no-aqlprofile --no-hipdnn --no-hipdnn-integration-tests --no-hipdnn-samples \
-      --output-dir /opt/rocm && \
-    rm -rf /tmp/therock-tools
+RUN mkdir -p /opt/rocm && \
+    curl -fsSL "${ROCM_DIST_URL}" | tar xz -C /opt/rocm
 
 # 3. Strip dev/test/bench cruft that install_rocm_from_artifacts.py still
 # pulls in (it filters by component, not by file type within a component).
