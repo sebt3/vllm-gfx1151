@@ -124,8 +124,8 @@ RUN mkdir -p /tmp/wheels && \
 # needs. Constraint file pins torch/triton to our from-source builds so
 # resolution doesn't silently pull vanilla CUDA torch from PyPI.
 ARG VLLM_TAG=v0.24.0
-RUN TORCH_VER=$(python -c "import torch; print(torch.__version__)") && \
-    TRITON_VER=$(python -c "import triton; print(triton.__version__)") && \
+RUN TORCH_VER=$(python -c "from importlib.metadata import version; print(version('torch'))") && \
+    TRITON_VER=$(python -c "from importlib.metadata import version; print(version('triton'))") && \
     printf "torch==%s\ntriton==%s\n" "$TORCH_VER" "$TRITON_VER" > /tmp/constraints.txt && \
     echo "Pinning runtime deps to torch==$TORCH_VER, triton==$TRITON_VER" && \
     curl -fsSL -o /tmp/common.txt "https://raw.githubusercontent.com/vllm-project/vllm/${VLLM_TAG}/requirements/common.txt" && \
