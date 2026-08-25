@@ -81,25 +81,12 @@ WORKDIR /tmp
 RUN mkdir -p /opt/rocm && \
     curl -fsSL "${ROCM_DIST_URL}" | tar xz -C /opt/rocm
 
-# 3. Strip dev/test/bench cruft that install_rocm_from_artifacts.py still
-# pulls in (it filters by component, not by file type within a component).
-# Confirmed dead weight for vLLM inference — think/vllm/DEBUG.md
-# 2026-08-25 image-bloat finding: keep only what's actually loaded at
-# runtime (libamdhip64, rocBLAS/hipBLASLt for GEMM, lib/llvm — Triton's
-# JIT needs a working `clang` at runtime, verified via `which clang` on
-# the old image). RCCL dropped: single-iGPU, no NCCL (same call the old
-# Dockerfile made). Static archives (.a) are never loaded by a
-# dynamically-linked process, dead weight by construction.
-RUN rm -rf \
-      /opt/rocm/bin /opt/rocm/clients /opt/rocm/share /opt/rocm/tests \
-      /opt/rocm/lib/*.a \
-      /opt/rocm/lib/librccl* \
-      /opt/rocm/lib/rdc /opt/rocm/lib/librocprof-sys* /opt/rocm/lib/rocprofiler-systems
-
-# 4. Python 3.13 venv via uv — matches the cpython_version stack-torch-
+# 3. Python 3.13 venv via uv — matches the cpython_version stack-torch-
 # gfx1151 built its wheels against (vllm-packages.yaml: "3.13.9"; a cp313
 # wheel is ABI-compatible with any 3.13.x). uv pinned to the same
-# last-verified-working version as the old image.
+# last-verified-working version as the old image. Moved ahead of the
+# /opt/rocm cleanup (was step 3, now step 5) because that cleanup strips
+# /opt/rocm/share — which step 4 below needs to still be there.
 COPY --from=ghcr.io/astral-sh/uv:0.11.12 /uv /usr/local/bin/uv
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH=/opt/venv/bin:/opt/rocm/bin:/opt/rocm/llvm/bin:$PATH
@@ -110,19 +97,50 @@ RUN uv venv /opt/venv --python 3.13 && \
       packaging==26.2 \
       setuptools==79.0.1
 
-# 5. Install the prebuilt wheels from stack-torch-gfx1151's release
+# 4. amdsmi — vLLM's ROCm platform detection imports this unconditionally
+# (vllm/platforms/__init__.py) to decide it's even running on ROCm at
+# all; without it every platform probe fails and vLLM raises "Failed to
+# infer device type" before it gets anywhere near loading a model
+# (real-hardware boot, 2026-08-25 — confirmed via `podman run` +
+# VLLM_LOGGING_LEVEL=DEBUG: "ROCm platform is not available because: No
+# module named 'amdsmi'"). stack-torch-gfx1151's own build-vllm.sh builds
+# an amdsmi wheel from TheRock's share/amd_smi, but it didn't make it
+# into the 0.1.0 release tarball (that build step apparently failed or
+# wasn't reached in whichever resumed run produced it). This repo.amd.com
+# ROCm tarball ships the same amd_smi source under share/amd_smi/
+# (setup.py + a pure-Python ctypes wrapper around libamd_smi.so, no
+# compilation needed) — install it straight from there instead of
+# waiting on that wheel to exist.
+RUN uv pip install /opt/rocm/share/amd_smi
+
+# 5. Strip dev/test/bench cruft that the ROCm tarball still carries.
+# Confirmed dead weight for vLLM inference — think/vllm/DEBUG.md
+# 2026-08-25 image-bloat finding: keep only what's actually loaded at
+# runtime (libamdhip64, rocBLAS/hipBLASLt for GEMM, lib/llvm — Triton's
+# JIT needs a working `clang` at runtime, verified via `which clang` on
+# the old image). RCCL dropped: single-iGPU, no NCCL (same call the old
+# Dockerfile made). Static archives (.a) are never loaded by a
+# dynamically-linked process, dead weight by construction. share/ is safe
+# to drop now that amdsmi (step 4) is already installed into the venv.
+RUN rm -rf \
+      /opt/rocm/bin /opt/rocm/clients /opt/rocm/share /opt/rocm/tests \
+      /opt/rocm/lib/*.a \
+      /opt/rocm/lib/librccl* \
+      /opt/rocm/lib/rdc /opt/rocm/lib/librocprof-sys* /opt/rocm/lib/rocprofiler-systems
+
+# 6. Install the prebuilt wheels from stack-torch-gfx1151's release
 # (torch, triton, vllm, amd-aiter, flash-attn, plus asyncpg/sentencepiece/
 # zstandard/numpy — C-ext deps with no prebuilt ROCm wheel available
 # upstream, bundled there so this step stays fully offline-capable for
 # these). --no-deps: they were built --no-deps too; the rest of vLLM's
-# deps come from step 6.
+# deps come from step 7.
 ARG STACK_TORCH_URL=https://github.com/sebt3/stack-torch-gfx1151/releases/download/${STACK_TORCH_TAG}/stack-torch-gfx1151-${STACK_TORCH_TAG}.tar.gz
 RUN mkdir -p /tmp/wheels && \
     curl -fsSL "${STACK_TORCH_URL}" | tar xz -C /tmp/wheels --strip-components=1 && \
     uv pip install --no-deps /tmp/wheels/*.whl && \
     rm -rf /tmp/wheels
 
-# 6. vLLM's own runtime dependencies. vLLM declares deps as `dynamic` in
+# 7. vLLM's own runtime dependencies. vLLM declares deps as `dynamic` in
 # pyproject.toml, loaded from requirements/common.txt + requirements/
 # rocm.txt at its own build time — the wheel was built --no-deps, so
 # install the same lists here, pinned to the exact tag stack-torch-gfx1151
@@ -153,7 +171,7 @@ RUN TORCH_VER=$(python -c "from importlib.metadata import version; print(version
     uv pip uninstall torchvision && \
     rm -rf /tmp/common.txt /tmp/rocm.txt /tmp/constraints.txt /root/.cache/uv /root/.cache/pip
 
-# 7. Pre-tuned Triton fused-MoE kernel configs for gfx1151 (unchanged from
+# 8. Pre-tuned Triton fused-MoE kernel configs for gfx1151 (unchanged from
 # the previous image). Still relevant for any layer AITER_MOE doesn't
 # cover — without these vLLM falls back to an untuned default config
 # (confirmed on the old image, 2026-08-25: "Using default MoE config.
@@ -161,7 +179,7 @@ RUN TORCH_VER=$(python -c "from importlib.metadata import version; print(version
 # benchmarks/kernels/benchmark_moe.py --tune; see README.md.
 COPY moe-configs/*.json /opt/venv/lib/python3.13/site-packages/vllm/model_executor/layers/fused_moe/configs/
 
-# 8. Runtime env. Mirrors the old image's flag set, with AITER flipped on
+# 9. Runtime env. Mirrors the old image's flag set, with AITER flipped on
 # (see header comment) and the AWQMarlin/Conch-specific bits dropped
 # (Conch (step 6 of the old Dockerfile) was for a linear-layer AWQ path;
 # not reinstated here yet — re-add if a checkpoint needs it and AITER's
