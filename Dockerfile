@@ -129,6 +129,19 @@ RUN mkdir -p /tmp/wheels && \
 # built (v0.24.0) so the requirement pins match what the wheel actually
 # needs. Constraint file pins torch/triton to our from-source builds so
 # resolution doesn't silently pull vanilla CUDA torch from PyPI.
+#
+# torchvision gets uninstalled right after: common.txt pulls it in
+# transitively (mistral_common[image], timm) but stack-torch-gfx1151
+# deliberately doesn't build it from source (git log: "unresolved
+# upstream duplicate-symbol bug"), so the copy requirements resolution
+# grabs from PyPI is a vanilla build compiled against a different torch -
+# crashes at import (torch._C._dispatch_has_kernel_for_dispatch_key
+# inside torchvision's own op registration; real-hardware boot,
+# 2026-08-25) the moment anything imports `transformers`, which vLLM does
+# unconditionally regardless of text_only. Removing it lets transformers'
+# normal "torchvision not available" fallback take over instead (it's
+# always been an optional dep there) - we run text_only: true everywhere
+# anyway, so no vision path is actually lost.
 ARG VLLM_TAG=v0.24.0
 RUN TORCH_VER=$(python -c "from importlib.metadata import version; print(version('torch'))") && \
     TRITON_VER=$(python -c "from importlib.metadata import version; print(version('triton'))") && \
@@ -137,6 +150,7 @@ RUN TORCH_VER=$(python -c "from importlib.metadata import version; print(version
     curl -fsSL -o /tmp/common.txt "https://raw.githubusercontent.com/vllm-project/vllm/${VLLM_TAG}/requirements/common.txt" && \
     curl -fsSL -o /tmp/rocm.txt "https://raw.githubusercontent.com/vllm-project/vllm/${VLLM_TAG}/requirements/rocm.txt" && \
     uv pip install -r /tmp/common.txt -r /tmp/rocm.txt --constraint /tmp/constraints.txt && \
+    uv pip uninstall torchvision && \
     rm -rf /tmp/common.txt /tmp/rocm.txt /tmp/constraints.txt /root/.cache/uv /root/.cache/pip
 
 # 7. Pre-tuned Triton fused-MoE kernel configs for gfx1151 (unchanged from
