@@ -1,38 +1,57 @@
 # vllm-gfx1151
 
-vLLM compilé depuis les sources contre **TheRock ROCm 7.13 nightly** pour AMD
-Strix Halo (**gfx1151 / RDNA 3.5**). Image OpenAI-compatible poussée sur Docker
-Hub + ghcr via GitHub Actions (`sebt3/vllm-gfx1151`).
+Image d'inférence vLLM OpenAI-compatible pour AMD Strix Halo (**gfx1151 /
+RDNA 3.5**), poussée sur Docker Hub + ghcr via GitHub Actions
+(`sebt3/vllm-gfx1151`).
 
-Cible : Qwen3.6-27B AWQ-INT4 (`cyankiwi/Qwen3.6-27B-AWQ-INT4`), decode
-single-stream avec DFlash N=8 sur 128 Go UMA. Perf pas encore validée par
-mesure — ne pas citer de chiffre tant qu'un run réel n'a pas été observé.
+**Réécrit le 2026-08-25** : ce repo ne compile plus rien lui-même. C'est un
+pur assemblage :
 
-## Origine
+- **Wheels (torch/triton/vllm/AITER/flash-attn)** : viennent du Release
+  publié par [`sebt3/stack-torch-gfx1151`](https://github.com/sebt3/stack-torch-gfx1151)
+  — build from-source fait *là-bas*, une fois, avec les patches gfx1151
+  vendorisés depuis [`bitserv-ai/_gfx115x_`](https://github.com/bitserv-ai/_gfx115x_)
+  (gating AITER pour gfx1x, kernels FLA/GDN gfx1151, attention hybride...).
+  vLLM actuellement pinné à `v0.24.0`.
+- **Runtime ROCm 7.14** : récupéré directement depuis les artefacts CI
+  officiels d'AMD (`ROCm/TheRock`, tag `therock-7.14`), pas depuis
+  [`sebt3/therock-gfx1151`](https://github.com/sebt3/therock-gfx1151) — ce
+  dernier ne patche que le *process* de build de TheRock, pas le
+  comportement runtime des libs, donc un build officiel vanilla est
+  ABI-identique pour ce qu'on en fait aujourd'hui. À reconnecter le jour où
+  `therock-gfx1151` porte un vrai patch comportemental (et aura fini un
+  build complet — pas encore le cas au 2026-08-25, cf. son historique CI).
 
-Vendorisé depuis [hec-ovi/vllm-awq4-qwen](https://github.com/hec-ovi/vllm-awq4-qwen)
-(licence Unlicense / domaine public, voir `LICENSE.upstream`). Trois fichiers
-repris **verbatim** :
+L'ancien build (compilation source de vLLM contre un tarball TheRock complet
+dans ce repo, `scripts/install_rocm_sdk.sh` + `scripts/patch_strix.py`
+vendorisés depuis [hec-ovi/vllm-awq4-qwen](https://github.com/hec-ovi/vllm-awq4-qwen),
+licence Unlicense, voir `LICENSE.upstream`) reste dans l'historique git.
+Raison du remplacement : chaque itération payait un rebuild ROCm+vLLM de
+plusieurs heures, et ~11.3 GiB de l'image obtenue se sont avérés être du
+bloat mort (binaires de test/bench, archives statiques `.a`, RCCL alors que
+c'est du single-iGPU — voir `think/vllm/DEBUG.md` dans le repo `kydah/home`,
+session 2026-08-25). Le split en 3 repos (`therock-gfx1151` /
+`stack-torch-gfx1151` / `vllm-gfx1151`) découple le lourd (rebuild rare,
+caché en Release) du léger (cet assemblage, qui ne fait que télécharger et
+`pip install`).
 
-- `scripts/install_rocm_sdk.sh` — installe le tarball TheRock ROCm (tarball
-  **épinglé** au `20260510` pour reproductibilité).
-- `scripts/patch_strix.py` — bundle de 18 patches gfx1151 sur vLLM v0.20.0
-  (monkey-patch amdsmi, détection arch, overrides AITER, clamp VRAM APU, et
-  cherry-picks des PR upstream #40176 / #40898 pour DFlash ROCm).
-- `Dockerfile` — build multi-étapes source.
+## AITER activé (à valider)
 
-Le kernel HIP expérimental `csrc/awq_mmq_gfx1151` de l'upstream **n'est pas
-inclus** : c'est un portage MMQ en cours, live-monté au runtime chez eux, pas
-dans le build. Le chemin AWQ rapide vient de `VLLM_USE_TRITON_AWQ=1` + la PR
-vLLM #36505 (AWQMarlin → ConchLinearKernel, `conch-triton-kernels`) :
-+57 % prefill / +73 % decode sur gfx1151 vs le legacy `ops.awq_gemm`.
+`VLLM_ROCM_USE_AITER=1` + les flags granulaires (`_LINEAR`, `_MOE`,
+`_RMSNORM`, `_MHA`) sont maintenant le défaut de l'image — **c'est
+précisément ce que cette réécriture teste**. L'ancienne image le désactivait
+(`VLLM_ROCM_USE_AITER=0`) parce que le gating gfx1151 de vLLM était cassé
+(`_aiter_ops.py` teste `on_gfx9()`, `rocm_aiter_fa.py` teste `on_mi3xx()` —
+tous deux `False` pour gfx1151 indépendamment du support réel) et le kernel
+sampler AITER plantait au premier forward sans ce fix. Les patches
+`aiter-gate-gfx1x.patch` / `aiter-fa-gfx1x-gate.patch` de
+`stack-torch-gfx1151` visent exactement ce bug de gating. **Pas encore
+vérifié sur silicium réel au moment de cette réécriture** — si ça replante,
+repasser à `VLLM_ROCM_USE_AITER=0` (les flags granulaires deviennent no-op).
 
-## Ce que le build ne fait PAS
-
-- **AITER** : désactivé (`VLLM_ROCM_USE_AITER=0`) — kernels CDNA qui freezent
-  gfx1151.
-- **Flash-Attention** compilée : sautée — régression ViT sur gfx1151. On passe
-  par TRITON_ATTN / AOTriton.
+Flash-Attention est maintenant compilée dans le stack (contrairement à
+l'ancienne image qui la sautait pour une régression ViT sur gfx1151) — pas
+encore revérifié si cette régression est toujours présente sur ce build.
 
 ## HIP graphs (`--enforce-eager`)
 
@@ -47,15 +66,23 @@ dense 27B ni en usage multi-requêtes concurrentes).
 
 ## Versions épinglées (rafraîchir en bloc)
 
-`torch` / `torchvision` / `torchaudio` / `triton` **et** le tarball TheRock sont
-tous épinglés au snapshot `rocm7.13.0a20260510`. Pour bumper :
+Les versions vivent maintenant dans `stack-torch-gfx1151` (`vllm-packages.yaml`
+— vLLM `v0.24.0`, ROCm `therock-7.14`, Python `3.13.9`), pas dans ce repo.
+Pour bumper :
 
-1. `ALLOW_LATEST=1` dans `install_rocm_sdk.sh` pour trouver le dernier tarball.
-2. Bumper les 4 wheels + le `PINNED_TARBALL` sur une date commune.
-3. Rebuild propre, puis valider (sanity + bench).
-
-Attention à la régression PyTorch #180485 (drop de `HIP_FOUND`) que le Patch 18
-compense — voir commentaires dans le `Dockerfile`.
+1. Dans `stack-torch-gfx1151` : changer `branch`/`commit` du bloc `vllm:` de
+   `vllm-packages.yaml`, re-triager les patches vendorisés depuis
+   `bitserv-ai/_gfx115x_` contre la nouvelle version, relancer le build
+   (`workflow_dispatch` — conçu comme `therock-gfx1151`, s'attendre à
+   plusieurs runs de reprise avant qu'un Release soit réellement publié :
+   `Package`/`Publish release` ne se déclenchent que si
+   `wheels/vllm-*.whl` existe en fin de run).
+2. Ici : bumper `STACK_TORCH_TAG` (build-arg du `Dockerfile`) vers le
+   nouveau Release, et `VLLM_TAG` (étape 6) vers le même tag vLLM que
+   `stack-torch-gfx1151` a construit, pour que les `requirements/*.txt`
+   récupérés matchent effectivement le wheel installé.
+3. `THEROCK_RUN_ID` (étape 2) suit le tag `therock-7.14` — à changer
+   seulement si `stack-torch-gfx1151` bump son propre run ROCm officiel.
 
 ## Secrets GitHub Actions requis
 
@@ -67,26 +94,26 @@ Le build tourne sur `ubuntu-latest` (x86) : le kernel gfx1151 est **cross-compil
 
 ## Tuning des kernels MoE (Triton)
 
-Ce build a été taillé au départ pour un modèle **dense** (Qwen3.6-27B AWQ-INT4)
-— aucun des 19 premiers patches ne touche le chemin MoE. Sur un modèle MoE
-(ex: Qwen3.6-35B-A3B, 256 experts), les couches d'experts tombent sur le
-fallback générique **"Moe WNA16"** de vLLM (kernel Triton fused-MoE, correct
-mais jamais autotuné pour ce GPU) : mesuré ~5-6x plus lent en decode qu'un
-DGX Spark équivalent sur le même modèle (chemin CUDA/FlashInfer, autotuné au
-boot). Fournir un fichier de config Triton tuné pour le shape exact
-(nombre d'experts, `intermediate_size`, dtype) comble une bonne partie de cet
-écart, sans écrire de nouveau kernel.
+Sur un modèle MoE (ex: Qwen3.6-35B-A3B, 256 experts) dont les couches
+d'experts tombent sur le fallback générique **"Moe WNA16"** de vLLM (kernel
+Triton fused-MoE, correct mais jamais autotuné pour ce GPU tant qu'AITER_MOE
+ne couvre pas la couche) : mesuré ~5-6x plus lent en decode qu'un DGX Spark
+équivalent sur le même modèle (chemin CUDA/FlashInfer, autotuné au boot).
+Fournir un fichier de config Triton tuné pour le shape exact (nombre
+d'experts, `intermediate_size`, dtype) comble une bonne partie de cet écart,
+sans écrire de nouveau kernel.
 
-**Prérequis : `Patch 20`** (dans `patch_strix.py`) doit être présent — il fixe
-`ROCmPlatform.get_device_name()` à retourner la string constante `"gfx1151"`.
-Sans ce patch, `amdsmi` étant entièrement mocké (Patch 1.5), cette méthode
-renvoie un `MagicMock` dont le `repr()` embarque un `id()` Python — différent
-à chaque redémarrage de process. Le nom de fichier de config MoE
-(`get_config_file_name()` dans `fused_moe.py`) intègre ce nom tel quel : un
-config tuné par un process ne matchera **jamais** celui calculé par le
-serveur au runtime sans ce patch. Vérifié empiriquement le 2026-07-07 sur le
-premier run de tuning (fichier généré nommé
-`device_name=<MagicMock ... id='...'>...json`, inutilisable).
+⚠️ **La recette ci-dessous référence `/opt/vllm/benchmarks/kernels/
+benchmark_moe.py` et `Patch 20` de `patch_strix.py` — les deux appartenaient
+à l'ancien build source (git history) et n'existent plus dans l'image
+réécrite le 2026-08-25** (vLLM est installé en wheel dans le venv, pas
+cloné en source ; pas de `patch_strix.py`). `get_device_name()` retourne
+déjà `"gfx1151"` nativement sur ce vLLM (`v0.24.0`, plus besoin du patch).
+Pour retuner : récupérer `benchmarks/kernels/benchmark_moe.py` depuis le
+tag vLLM correspondant (`curl` depuis GitHub, comme les `requirements/*.txt`
+à l'étape 6 du `Dockerfile`) plutôt que de chercher un chemin `/opt/vllm/`
+qui n'existe plus. Le reste de la recette (points 1-8) reste valide dans
+son principe.
 
 ### Recette (à répéter pour chaque nouveau shape MoE — nouveau modèle,
 ### nouveau `num_experts`/`moe_intermediate_size`, nouveau dtype de quant)
@@ -155,8 +182,8 @@ déploiement. Extraits load-bearing à reprendre :
 --speculative-config '{"method":"dflash","model":"z-lab/Qwen3.6-27B-DFlash","num_speculative_tokens":8}'
 # PAS de --quantization (auto-détection compressed-tensors => AWQMarlin)
 
-# Env load-bearing (déjà posé par install_rocm_sdk.sh + Dockerfile ENV)
-VLLM_ROCM_USE_AITER=0
+# Env load-bearing (déjà posé par le Dockerfile ENV, étape 8)
+VLLM_ROCM_USE_AITER=1   # nouveau depuis 2026-08-25, cf. section "AITER activé" — repasser à 0 si crash
 VLLM_USE_TRITON_AWQ=1
 VLLM_DISABLE_COMPILE_CACHE=1
 HSA_NO_SCRATCH_RECLAIM=1                # vllm#37151 segfault AWQ load
