@@ -43,6 +43,18 @@ jobs:
         push: true
         cache-from: type=gha
         cache-to: type=gha,mode=max
+        # Fetching ROCm from ROCm/TheRock's public CI artifacts (Dockerfile
+        # step 2) resolves the run via the GitHub REST API first - the bare
+        # runner has an ambiently-authenticated `gh` CLI, but a Docker build
+        # container doesn't, so that step falls back to unauthenticated
+        # requests and can get rate-limited into returning zero artifacts
+        # (hit this exact failure on the first two runs of this rewrite,
+        # 2026-08-25). Pass the job's own GITHUB_TOKEN in as a build secret
+        # (not a build-arg, so it never lands in an image layer) to give it
+        # the same auth stack-torch-gfx1151's own bare-runner fetch step
+        # gets for free.
+        secrets: |
+          GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
         tags: |
           ${{ github.repository }}:latest
           ${{ github.repository }}:${{ steps.version.outputs.tag }}

@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # vllm-gfx1151 runtime image — assembled from prebuilt artifacts, no native
 # compilation. Rewritten 2026-08-25 to replace the old from-source
 # monolithic build (git history: previous Dockerfile compiled vLLM's own
@@ -62,8 +63,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Excludes components vLLM inference never touches at *fetch* time
 # (rocprofiler-*, rocalution, rocwmma, hiptensor, mpi, hipdnn, rocdecode,
 # rocjpeg) — narrower than the old image's full generic TheRock tarball.
+#
+# GITHUB_TOKEN mounted as a build secret (not ENV/ARG — never lands in a
+# layer): install_rocm_from_artifacts.py resolves the run via GitHub's
+# REST API before touching S3, and unauthenticated requests get rate-
+# limited to the point of silently returning zero matching artifacts
+# (hit this on 2026-08-25 — a bare GH Actions step has an ambiently
+# authenticated `gh` CLI for free, a Docker build container doesn't).
 WORKDIR /tmp
-RUN pip3 install --break-system-packages --no-cache-dir boto3 pyzstd && \
+RUN --mount=type=secret,id=GITHUB_TOKEN \
+    export GITHUB_TOKEN="$(cat /run/secrets/GITHUB_TOKEN 2>/dev/null || true)" && \
+    pip3 install --break-system-packages --no-cache-dir boto3 pyzstd && \
     git clone --depth 1 --branch therock-7.14 --filter=blob:none --sparse \
       https://github.com/ROCm/TheRock.git /tmp/therock-tools && \
     git -C /tmp/therock-tools sparse-checkout set build_tools cmake && \
