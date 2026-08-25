@@ -47,12 +47,18 @@ ARG ROCM_DIST_URL=https://repo.amd.com/rocm/tarball-multi-arch/therock-dist-linu
 # build-essential/cmake/ninja/pkg-config. Same list as the old image's
 # runtime portion, kept for parity (libnuma-dev/libelf1t64/libdrm-dev for
 # the HIP runtime, libgoogle-perftools4 for the tcmalloc LD_PRELOAD below).
+# libprotobuf32t64 + libsleef3: NOT part of the ROCm SDK tarball (step 2) —
+# direct runtime deps of torch's own .so files (libtorch_cpu.so pulls in
+# libprotobuf.so.32, libsleef.so.3). Found by readelf -d across every .so
+# in the stack-torch-gfx1151 wheels rather than one crash-and-fix cycle at
+# a time (2026-08-25: first boot on real hardware crashed on
+# libprotobuf.so.32 alone; checked the rest before the next attempt).
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl git \
       python3 python3-pip python3-venv \
       libatomic1 libnuma-dev libgomp1 libelf1t64 \
       libdrm-dev zlib1g-dev libssl-dev \
-      libgoogle-perftools4 \
+      libgoogle-perftools4 libprotobuf32t64 libsleef3 \
       procps \
     && rm -rf /var/lib/apt/lists/*
 
