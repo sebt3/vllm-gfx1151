@@ -44,10 +44,21 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG STACK_TORCH_TAG=0.2.0
 ARG ROCM_DIST_URL=https://repo.amd.com/rocm/tarball-multi-arch/therock-dist-linux-gfx1151-7.14.0.tar.gz
 
-# 1. Runtime system deps only — nothing compiles in this image, so no
-# build-essential/cmake/ninja/pkg-config. Same list as the old image's
-# runtime portion, kept for parity (libnuma-dev/libelf1t64/libdrm-dev for
-# the HIP runtime, libgoogle-perftools4 for the tcmalloc LD_PRELOAD below).
+# 1. Runtime system deps. Originally "nothing compiles in this image, so
+# no build-essential" — no longer true: build-essential (gcc/g++/make/
+# libc6-dev/libstdc++-dev) added 2026-08-26 because AITER JIT-compiles
+# some of its own HIP/CK kernels at first use (see step 9's CC/CXX
+# comment for the compiler-discovery half of this). Real-hardware boot,
+# VLLM_ROCM_USE_AITER=1: clang (CC/CXX, pointed at the toolchain kept
+# for Triton's own JIT) failed with "Could not find standard C++ header
+# 'cmath'" / "'cstdlib' file not found" - this image had zero C/C++
+# headers installed. We don't use gcc/g++ themselves (CC/CXX still
+# point at clang), just the headers build-essential drags in - accepted
+# the size for it: perf from AITER actually working matters more than
+# shipping this image lean, plenty of headroom on this hardware either
+# way (explicit call, 2026-08-26 — see think/vllm/DEBUG.md).
+# libnuma-dev/libelf1t64/libdrm-dev for the HIP runtime,
+# libgoogle-perftools4 for the tcmalloc LD_PRELOAD below.
 # libprotobuf32t64 + libsleef3: NOT part of the ROCm SDK tarball (step 2) —
 # direct runtime deps of torch's own .so files (libtorch_cpu.so pulls in
 # libprotobuf.so.32, libsleef.so.3). Found by readelf -d across every .so
@@ -57,6 +68,7 @@ ARG ROCM_DIST_URL=https://repo.amd.com/rocm/tarball-multi-arch/therock-dist-linu
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl git \
       python3 python3-pip python3-venv \
+      build-essential \
       libatomic1 libnuma-dev libgomp1 libelf1t64 \
       libdrm-dev zlib1g-dev libssl-dev \
       libgoogle-perftools4 libprotobuf32t64 libsleef3 \
@@ -118,13 +130,33 @@ RUN uv pip install /opt/rocm/share/amd_smi
 # Confirmed dead weight for vLLM inference — think/vllm/DEBUG.md
 # 2026-08-25 image-bloat finding: keep only what's actually loaded at
 # runtime (libamdhip64, rocBLAS/hipBLASLt for GEMM, lib/llvm — Triton's
-# JIT needs a working `clang` at runtime, verified via `which clang` on
-# the old image). RCCL dropped: single-iGPU, no NCCL (same call the old
-# Dockerfile made). Static archives (.a) are never loaded by a
-# dynamically-linked process, dead weight by construction. share/ is safe
-# to drop now that amdsmi (step 4) is already installed into the venv.
+# JIT needs a working `clang` at runtime). RCCL dropped: single-iGPU, no
+# NCCL. Static archives (.a) are never loaded by a dynamically-linked
+# process, dead weight by construction.
+#
+# 2026-08-25/26: that DEBUG.md finding was against the OLD 26.9GiB image
+# (a different, much fatter ROCm tarball where /opt/rocm/bin alone was
+# 5.3GiB of test/bench binaries). This repo.amd.com tarball is already
+# lean - /opt/rocm/bin totals ~345MB, /opt/rocm/share ~36MB (no
+# clients/, no tests/ at all) - and both turned out to hide small,
+# genuinely load-bearing files: share/amd_smi (step 4, before this
+# runs), and then two AITER runtime deps found one real-hardware crash
+# at a time (VLLM_ROCM_USE_AITER=1): hipconfig (needed for HIP version
+# detection) and rocminfo (needed for GPU arch detection, "Could not
+# find rocminfo in PATH or ROCM_HOME"). Given the whole directories are
+# only a few hundred MB combined - cheap in an image already carrying a
+# ~24GiB PyTorch/Triton build - keeping bin/ and share/ wholesale and
+# only excluding the handful of confirmed multi-MB items nothing here
+# uses (profilers, debuggers, integration tests, a vendored MIOpen
+# driver) is more robust than continuing to whack-a-mole individual
+# files back in as each new crash names one.
 RUN rm -rf \
-      /opt/rocm/bin /opt/rocm/clients /opt/rocm/share /opt/rocm/tests \
+      /opt/rocm/bin/rocshmem_info /opt/rocm/bin/hipify-clang \
+      /opt/rocm/bin/rocprof-sys-* /opt/rocm/bin/rocgdb-py* \
+      /opt/rocm/bin/rdcd /opt/rocm/bin/rdci \
+      /opt/rocm/bin/hipdnn_integration_tests /opt/rocm/bin/MIOpenDriver \
+      /opt/rocm/bin/flatc \
+      /opt/rocm/share/doc /opt/rocm/share/man \
       /opt/rocm/lib/*.a \
       /opt/rocm/lib/librccl* \
       /opt/rocm/lib/rdc /opt/rocm/lib/librocprof-sys* /opt/rocm/lib/rocprofiler-systems
@@ -171,6 +203,15 @@ RUN TORCH_VER=$(python -c "from importlib.metadata import version; print(version
     uv pip install -r /tmp/common.txt -r /tmp/rocm.txt --constraint /tmp/constraints.txt && \
     uv pip uninstall torchvision && \
     rm -rf /tmp/common.txt /tmp/rocm.txt /tmp/constraints.txt /root/.cache/uv /root/.cache/pip
+
+# 7c. pybind11 — aiter JIT-compiles some of its own kernels at first use
+# (see step 9's CC/CXX comment) and that build path needs pybind11 to
+# generate the Python bindings; neither vllm's nor aiter's declared
+# requirements pull it in as a runtime dep (it's normally a build-time-
+# only need, invisible until something actually triggers a JIT build).
+# Real-hardware boot, 2026-08-26, VLLM_ROCM_USE_AITER=1: "ModuleNotFoundError:
+# No module named 'pybind11'" from inside aiter's ninja-file generation.
+RUN uv pip install pybind11
 
 # 7b. vllm/triton_utils/__init__.py unconditionally imports several
 # newer Triton symbols when HAS_TRITON is true that our custom-built
@@ -231,8 +272,24 @@ COPY moe-configs/*.json /opt/venv/lib/python3.13/site-packages/vllm/model_execut
 # (Conch (step 6 of the old Dockerfile) was for a linear-layer AWQ path;
 # not reinstated here yet — re-add if a checkpoint needs it and AITER's
 # own linear path doesn't cover it).
+#
+# ROCM_HOME/ROCM_PATH: aiter's _find_rocm_home() checks these first
+# (before falling back to `which hipcc`/default-path guesses) - set
+# explicitly rather than relying on the fallback chain working.
+# CC/CXX: aiter JIT-compiles some of its own kernels at first use (like
+# Triton, but via a plain PyTorch-style C++ extension build - ninja +
+# a real compiler), and defaults to bare `cc`/`c++` if unset - neither
+# exists in this image (no build-essential, this is assembly-only).
+# Real-hardware boot, 2026-08-26, VLLM_ROCM_USE_AITER=1: "TypeError:
+# expected str, bytes or os.PathLike object, not NoneType" from
+# shutil.which(get_cxx_compiler()) inside aiter's JIT build path.
+# Point both at the clang toolchain already kept for Triton's own JIT.
 ENV LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64:/opt/rocm/llvm/lib \
     HIP_CLANG_PATH=/opt/rocm/llvm/bin \
+    ROCM_HOME=/opt/rocm \
+    ROCM_PATH=/opt/rocm \
+    CC=/opt/rocm/llvm/bin/clang \
+    CXX=/opt/rocm/llvm/bin/clang++ \
     ROCBLAS_USE_HIPBLASLT=1 \
     TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1 \
     HIP_FORCE_DEV_KERNARG=1 \
