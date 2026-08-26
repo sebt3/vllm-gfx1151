@@ -10,10 +10,11 @@
 #
 # Wheels (torch/triton/vllm/aiter/flash-attn + a few C-ext deps with no
 # prebuilt ROCm wheel upstream) come from sebt3/stack-torch-gfx1151 —
-# built from source there, once, on Ubuntu 24.04, vLLM v0.24.0, ROCm 7.14,
+# built from source there, once, on Ubuntu 24.04, vLLM v0.28.0, ROCm 7.14,
 # with the AITER-gfx1151-gating / FLA-gfx1151 / hybrid-attention patches
-# from bitserv-ai/_gfx115x_ applied (see that repo's patches/). This image
-# does not build anything — it only assembles.
+# from bitserv-ai/_gfx115x_ applied (see that repo's patches/, re-triaged
+# against v0.28.0 on 2026-08-26). This image does not build anything — it
+# only assembles.
 #
 # ROCm 7.14 runtime comes from AMD's stable release repo (repo.amd.com,
 # not sebt3/therock-gfx1151): that repo's 3 local patches only fix
@@ -40,7 +41,7 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-ARG STACK_TORCH_TAG=0.1.0
+ARG STACK_TORCH_TAG=0.2.0
 ARG ROCM_DIST_URL=https://repo.amd.com/rocm/tarball-multi-arch/therock-dist-linux-gfx1151-7.14.0.tar.gz
 
 # 1. Runtime system deps only — nothing compiles in this image, so no
@@ -144,7 +145,7 @@ RUN mkdir -p /tmp/wheels && \
 # pyproject.toml, loaded from requirements/common.txt + requirements/
 # rocm.txt at its own build time — the wheel was built --no-deps, so
 # install the same lists here, pinned to the exact tag stack-torch-gfx1151
-# built (v0.24.0) so the requirement pins match what the wheel actually
+# built (v0.28.0) so the requirement pins match what the wheel actually
 # needs. Constraint file pins torch/triton to our from-source builds so
 # resolution doesn't silently pull vanilla CUDA torch from PyPI.
 #
@@ -160,7 +161,7 @@ RUN mkdir -p /tmp/wheels && \
 # normal "torchvision not available" fallback take over instead (it's
 # always been an optional dep there) - we run text_only: true everywhere
 # anyway, so no vision path is actually lost.
-ARG VLLM_TAG=v0.24.0
+ARG VLLM_TAG=v0.28.0
 RUN TORCH_VER=$(python -c "from importlib.metadata import version; print(version('torch'))") && \
     TRITON_VER=$(python -c "from importlib.metadata import version; print(version('triton'))") && \
     printf "torch==%s\ntriton==%s\n" "$TORCH_VER" "$TRITON_VER" > /tmp/constraints.txt && \
