@@ -172,6 +172,39 @@ RUN TORCH_VER=$(python -c "from importlib.metadata import version; print(version
     uv pip uninstall torchvision && \
     rm -rf /tmp/common.txt /tmp/rocm.txt /tmp/constraints.txt /root/.cache/uv /root/.cache/pip
 
+# 7b. vllm/triton_utils/__init__.py unconditionally imports
+# `triton.experimental.gluon` when HAS_TRITON is true - a module our
+# custom-built Triton (main_perf @ 0ec280cf) doesn't have, same class of
+# drift as stack-torch-gfx1151's triton-knobs-import-fix.patch
+# (triton.knobs, also missing from this exact pin). Real-hardware boot,
+# 2026-08-26: ModuleNotFoundError: No module named 'triton.experimental'
+# crashes at vllm's own top-level import, before argparse even runs.
+# Patched here directly (installed site-packages) rather than round-
+# tripping through a stack-torch-gfx1151 patch + ~6h rebuild for a
+# 2-line fix - fold this into that repo's patches/ next time a real
+# rebuild happens anyway. Falls back to the file's own
+# TritonLanguagePlaceholder, exactly like the HAS_TRITON=False branch
+# two lines below already does for the same symbols.
+RUN python3 <<'PYEOF'
+import pathlib
+p = pathlib.Path("/opt/venv/lib/python3.13/site-packages/vllm/triton_utils/__init__.py")
+src = p.read_text()
+old = (
+    "    from triton.experimental import gluon\n"
+    "    from triton.experimental.gluon import language as gl\n"
+)
+new = (
+    "    try:\n"
+    "        from triton.experimental import gluon\n"
+    "        from triton.experimental.gluon import language as gl\n"
+    "    except ImportError:\n"
+    "        gluon = TritonLanguagePlaceholder()\n"
+    "        gl = TritonLanguagePlaceholder()\n"
+)
+assert old in src, "gluon import block not found - vllm/triton_utils/__init__.py layout changed"
+p.write_text(src.replace(old, new, 1))
+PYEOF
+
 # 8. Pre-tuned Triton fused-MoE kernel configs for gfx1151 (unchanged from
 # the previous image). Still relevant for any layer AITER_MOE doesn't
 # cover — without these vLLM falls back to an untuned default config
