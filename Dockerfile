@@ -8,13 +8,17 @@
 # test/bench/static-archive weight never touched at runtime, see
 # think/vllm/DEBUG.md in the sibling kydah/home repo, 2026-08-25).
 #
-# Wheels (torch/triton/vllm/aiter/flash-attn + a few C-ext deps with no
-# prebuilt ROCm wheel upstream) come from sebt3/stack-torch-gfx1151 —
-# built from source there, once, on Ubuntu 24.04, vLLM v0.28.0, ROCm 7.14,
-# with the AITER-gfx1151-gating / FLA-gfx1151 / hybrid-attention patches
-# from bitserv-ai/_gfx115x_ applied (see that repo's patches/, re-triaged
-# against v0.28.0 on 2026-08-26). This image does not build anything — it
-# only assembles.
+# Wheels (torch/torchvision/triton/vllm/aiter/flash-attn + a few C-ext
+# deps with no prebuilt ROCm wheel upstream) come from
+# sebt3/stack-torch-gfx1151 — built from source there, once, on Ubuntu
+# 24.04, vLLM 0.28.1.dev0, ROCm 7.14, with the AITER-gfx1151-gating /
+# FLA-gfx1151 / hybrid-attention patches from bitserv-ai/_gfx115x_ applied
+# (see that repo's patches/, re-triaged against v0.28.0 on 2026-08-26).
+# stack-torch-gfx1151 Release 0.3.0 also finally builds torchvision from
+# source (ABI-matched to our torch — the duplicate-symbol bug that made
+# earlier releases skip it was root-caused there) and ships an amdsmi
+# wheel; both were worked around in this image before. This image does
+# not build anything — it only assembles.
 #
 # ROCm 7.14 runtime comes from AMD's stable release repo (repo.amd.com,
 # not sebt3/therock-gfx1151): that repo's 3 local patches only fix
@@ -41,7 +45,7 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-ARG STACK_TORCH_TAG=0.2.0
+ARG STACK_TORCH_TAG=0.3.0
 ARG ROCM_DIST_URL=https://repo.amd.com/rocm/tarball-multi-arch/therock-dist-linux-gfx1151-7.14.0.tar.gz
 
 # 1. Runtime system deps. Originally "nothing compiles in this image, so
@@ -116,15 +120,11 @@ RUN uv venv /opt/venv --python 3.13 && \
 # infer device type" before it gets anywhere near loading a model
 # (real-hardware boot, 2026-08-25 — confirmed via `podman run` +
 # VLLM_LOGGING_LEVEL=DEBUG: "ROCm platform is not available because: No
-# module named 'amdsmi'"). stack-torch-gfx1151's own build-vllm.sh builds
-# an amdsmi wheel from TheRock's share/amd_smi, but it didn't make it
-# into the 0.1.0 release tarball (that build step apparently failed or
-# wasn't reached in whichever resumed run produced it). This repo.amd.com
-# ROCm tarball ships the same amd_smi source under share/amd_smi/
-# (setup.py + a pure-Python ctypes wrapper around libamd_smi.so, no
-# compilation needed) — install it straight from there instead of
-# waiting on that wheel to exist.
-RUN uv pip install /opt/rocm/share/amd_smi
+# module named 'amdsmi'"). Earlier images installed it straight from the
+# ROCm tarball's share/amd_smi because stack-torch-gfx1151's amdsmi wheel
+# was missing from the 0.1.0/0.2.0 release tarballs. Release 0.3.0 ships
+# it (amdsmi-26.5.0+2b22ab01-py3-none-any.whl) — it now comes in with the
+# rest of the wheels at step 6, no separate install needed here.
 
 # 5. Strip dev/test/bench cruft that the ROCm tarball still carries.
 # Confirmed dead weight for vLLM inference — think/vllm/DEBUG.md
@@ -162,11 +162,11 @@ RUN rm -rf \
       /opt/rocm/lib/rdc /opt/rocm/lib/librocprof-sys* /opt/rocm/lib/rocprofiler-systems
 
 # 6. Install the prebuilt wheels from stack-torch-gfx1151's release
-# (torch, triton, vllm, amd-aiter, flash-attn, plus asyncpg/sentencepiece/
-# zstandard/numpy — C-ext deps with no prebuilt ROCm wheel available
-# upstream, bundled there so this step stays fully offline-capable for
-# these). --no-deps: they were built --no-deps too; the rest of vLLM's
-# deps come from step 7.
+# (torch, torchvision, triton, vllm, amd-aiter, amdsmi, flash-attn, plus
+# asyncpg/sentencepiece/zstandard/numpy — C-ext deps with no prebuilt ROCm
+# wheel available upstream, bundled there so this step stays fully
+# offline-capable for these). --no-deps: they were built --no-deps too;
+# the rest of vLLM's deps come from step 7.
 ARG STACK_TORCH_URL=https://github.com/sebt3/stack-torch-gfx1151/releases/download/${STACK_TORCH_TAG}/stack-torch-gfx1151-${STACK_TORCH_TAG}.tar.gz
 RUN mkdir -p /tmp/wheels && \
     curl -fsSL "${STACK_TORCH_URL}" | tar xz -C /tmp/wheels --strip-components=1 && \
@@ -181,27 +181,28 @@ RUN mkdir -p /tmp/wheels && \
 # needs. Constraint file pins torch/triton to our from-source builds so
 # resolution doesn't silently pull vanilla CUDA torch from PyPI.
 #
-# torchvision gets uninstalled right after: common.txt pulls it in
-# transitively (mistral_common[image], timm) but stack-torch-gfx1151
-# deliberately doesn't build it from source (git log: "unresolved
-# upstream duplicate-symbol bug"), so the copy requirements resolution
-# grabs from PyPI is a vanilla build compiled against a different torch -
-# crashes at import (torch._C._dispatch_has_kernel_for_dispatch_key
-# inside torchvision's own op registration; real-hardware boot,
-# 2026-08-25) the moment anything imports `transformers`, which vLLM does
-# unconditionally regardless of text_only. Removing it lets transformers'
-# normal "torchvision not available" fallback take over instead (it's
-# always been an optional dep there) - we run text_only: true everywhere
-# anyway, so no vision path is actually lost.
+# torchvision is pinned in the constraint file alongside torch/triton:
+# common.txt pulls it in transitively (mistral_common[image], timm), and
+# without a pin the resolver would replace our ABI-matched from-source
+# wheel (step 6) with a vanilla CUDA build from PyPI — which crashes at
+# import (torch._C._dispatch_has_kernel_for_dispatch_key inside
+# torchvision's own op registration; real-hardware boot, 2026-08-25) the
+# moment anything imports `transformers`, which vLLM does unconditionally
+# regardless of text_only. Earlier images uninstalled torchvision
+# outright instead, but that broke vLLM's model registry — it imports
+# qwen3_vl.py while inspecting Qwen3_5MoeForConditionalGeneration (even
+# for a text-only checkpoint), and that chain needs
+# torchvision.transforms.v2 to exist. stack-torch-gfx1151 0.3.0 builds it
+# from source now, so the right move is to keep it and pin it.
 ARG VLLM_TAG=v0.28.0
 RUN TORCH_VER=$(python -c "from importlib.metadata import version; print(version('torch'))") && \
     TRITON_VER=$(python -c "from importlib.metadata import version; print(version('triton'))") && \
-    printf "torch==%s\ntriton==%s\n" "$TORCH_VER" "$TRITON_VER" > /tmp/constraints.txt && \
-    echo "Pinning runtime deps to torch==$TORCH_VER, triton==$TRITON_VER" && \
+    TORCHVISION_VER=$(python -c "from importlib.metadata import version; print(version('torchvision'))") && \
+    printf "torch==%s\ntriton==%s\ntorchvision==%s\n" "$TORCH_VER" "$TRITON_VER" "$TORCHVISION_VER" > /tmp/constraints.txt && \
+    echo "Pinning runtime deps to torch==$TORCH_VER, triton==$TRITON_VER, torchvision==$TORCHVISION_VER" && \
     curl -fsSL -o /tmp/common.txt "https://raw.githubusercontent.com/vllm-project/vllm/${VLLM_TAG}/requirements/common.txt" && \
     curl -fsSL -o /tmp/rocm.txt "https://raw.githubusercontent.com/vllm-project/vllm/${VLLM_TAG}/requirements/rocm.txt" && \
     uv pip install -r /tmp/common.txt -r /tmp/rocm.txt --constraint /tmp/constraints.txt && \
-    uv pip uninstall torchvision && \
     rm -rf /tmp/common.txt /tmp/rocm.txt /tmp/constraints.txt /root/.cache/uv /root/.cache/pip
 
 # 7c. pybind11 — aiter JIT-compiles some of its own kernels at first use
