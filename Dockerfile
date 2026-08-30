@@ -14,11 +14,12 @@
 # 24.04, vLLM 0.28.1.dev0, ROCm 7.14, with the AITER-gfx1151-gating /
 # FLA-gfx1151 / hybrid-attention patches from bitserv-ai/_gfx115x_ applied
 # (see that repo's patches/, re-triaged against v0.28.0 on 2026-08-26).
-# stack-torch-gfx1151 Release 0.3.0 also finally builds torchvision from
+# stack-torch-gfx1151 Release 0.3.x also finally builds torchvision from
 # source (ABI-matched to our torch — the duplicate-symbol bug that made
-# earlier releases skip it was root-caused there) and ships an amdsmi
-# wheel; both were worked around in this image before. This image does
-# not build anything — it only assembles.
+# earlier releases skip it was root-caused there; 0.3.0's first attempt
+# still mis-registered _cuda_version, 0.3.1 actually fixed it) and ships
+# an amdsmi wheel; both were worked around in this image before. This
+# image does not build anything — it only assembles.
 #
 # ROCm 7.14 runtime comes from AMD's stable release repo (repo.amd.com,
 # not sebt3/therock-gfx1151): that repo's 3 local patches only fix
@@ -45,7 +46,7 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-ARG STACK_TORCH_TAG=0.3.0
+ARG STACK_TORCH_TAG=0.3.1
 ARG ROCM_DIST_URL=https://repo.amd.com/rocm/tarball-multi-arch/therock-dist-linux-gfx1151-7.14.0.tar.gz
 
 # 1. Runtime system deps. Originally "nothing compiles in this image, so
@@ -122,7 +123,7 @@ RUN uv venv /opt/venv --python 3.13 && \
 # VLLM_LOGGING_LEVEL=DEBUG: "ROCm platform is not available because: No
 # module named 'amdsmi'"). Earlier images installed it straight from the
 # ROCm tarball's share/amd_smi because stack-torch-gfx1151's amdsmi wheel
-# was missing from the 0.1.0/0.2.0 release tarballs. Release 0.3.0 ships
+# was missing from the 0.1.0/0.2.0 release tarballs. Release 0.3.0+ ships
 # it (amdsmi-26.5.0+2b22ab01-py3-none-any.whl) — it now comes in with the
 # rest of the wheels at step 6, no separate install needed here.
 
@@ -192,8 +193,9 @@ RUN mkdir -p /tmp/wheels && \
 # outright instead, but that broke vLLM's model registry — it imports
 # qwen3_vl.py while inspecting Qwen3_5MoeForConditionalGeneration (even
 # for a text-only checkpoint), and that chain needs
-# torchvision.transforms.v2 to exist. stack-torch-gfx1151 0.3.0 builds it
-# from source now, so the right move is to keep it and pin it.
+# torchvision.transforms.v2 to exist. stack-torch-gfx1151 0.3.1 builds it
+# from source now (ABI-matched, _cuda_version registration fixed), so the
+# right move is to keep it and pin it.
 ARG VLLM_TAG=v0.28.0
 RUN TORCH_VER=$(python -c "from importlib.metadata import version; print(version('torch'))") && \
     TRITON_VER=$(python -c "from importlib.metadata import version; print(version('triton'))") && \
