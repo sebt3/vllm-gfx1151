@@ -173,11 +173,29 @@ RUN rm -rf \
 # wheel available upstream, bundled there so this step stays fully
 # offline-capable for these). --no-deps: they were built --no-deps too;
 # the rest of vLLM's deps come from step 7.
+#
+# Dedup pass first: stack-torch-gfx1151's prune_old_wheels() passes an
+# already-glob-expanded pattern into a function that only reads $1, so it
+# silently fails to remove stale wheels when a rebuild produces a *new
+# filename*. Packages whose version carries no build date (torch, triton)
+# just overwrite the same name and are fine; amd-aiter's version has a
+# `.dYYYYMMDD` suffix, so a cross-day resumed build ships two wheels
+# (0.3.2 tarball: amd_aiter ...d20260829 and ...d20260830) and
+# `uv pip install *.whl` aborts with "conflicting URLs for package
+# amd-aiter". Keep the lexically-highest wheel per distribution name
+# (dist names sort stably; the .dYYYYMMDD / +gHASH suffixes make newer
+# builds sort last). Fix belongs upstream too — track separately.
 ARG STACK_TORCH_URL=https://github.com/sebt3/stack-torch-gfx1151/releases/download/${STACK_TORCH_TAG}/stack-torch-gfx1151-${STACK_TORCH_TAG}.tar.gz
 RUN mkdir -p /tmp/wheels && \
     curl -fsSL "${STACK_TORCH_URL}" | tar xz -C /tmp/wheels --strip-components=1 && \
+    cd /tmp/wheels && \
+    for n in $(ls *.whl | sed 's/-[0-9].*//' | sort -u); do \
+      ls "${n}"-*.whl 2>/dev/null | sort | head -n -1 | while read -r stale; do \
+        echo "dedup: dropping ${stale}"; rm -f "${stale}"; \
+      done; \
+    done && \
     uv pip install --no-deps /tmp/wheels/*.whl && \
-    rm -rf /tmp/wheels
+    cd / && rm -rf /tmp/wheels
 
 # 7. vLLM's own runtime dependencies. vLLM declares deps as `dynamic` in
 # pyproject.toml, loaded from requirements/common.txt + requirements/
