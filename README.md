@@ -12,7 +12,7 @@ pur assemblage :
   — build from-source fait *là-bas*, une fois, avec les patches gfx1151
   vendorisés depuis [`bitserv-ai/_gfx115x_`](https://github.com/bitserv-ai/_gfx115x_)
   (gating AITER pour gfx1x, kernels FLA/GDN gfx1151, attention hybride...).
-  vLLM actuellement `0.28.1.dev0` (stack-torch-gfx1151 Release `0.3.1`).
+  vLLM actuellement `0.28.1.dev0` (stack-torch-gfx1151 Release `0.3.2`).
 - **Runtime ROCm 7.14** : récupéré directement depuis les artefacts CI
   officiels d'AMD (`ROCm/TheRock`, tag `therock-7.14`), pas depuis
   [`sebt3/therock-gfx1151`](https://github.com/sebt3/therock-gfx1151) — ce
@@ -67,7 +67,7 @@ dense 27B ni en usage multi-requêtes concurrentes).
 ## Versions épinglées (rafraîchir en bloc)
 
 Les versions vivent maintenant dans `stack-torch-gfx1151` (`vllm-packages.yaml`
-— actuellement vLLM `0.28.1.dev0` (commit `2cf0a6915`, Release `0.3.1`), ROCm
+— actuellement vLLM `0.28.1.dev0` (commit `2cf0a6915`, Release `0.3.2`), ROCm
 `therock-7.14`, Python `3.13.9`), pas dans ce repo. Pour bumper :
 
 1. Dans `stack-torch-gfx1151` : changer `branch`/`commit` du bloc `vllm:` de
@@ -83,8 +83,11 @@ Les versions vivent maintenant dans `stack-torch-gfx1151` (`vllm-packages.yaml`
    `requirements/*.txt` récupérés matchent le wheel installé. Les builds
    `0.3.x` sont des `0.28.1.dev0` (entre deux tags upstream) — on garde
    `VLLM_TAG=v0.28.0`, les listes de deps n'ayant pas bougé sur cet écart.
-   `0.3.0`→`0.3.1` : uniquement le fix TorchVision (`_cuda_version`
-   dupliqué), pas de bump vLLM.
+   `0.3.0`→`0.3.1` : fix TorchVision (`_cuda_version` dupliqué).
+   `0.3.1`→`0.3.2` : fix du patch triton `AttrsDescriptor.__repr__` qui ne
+   s'appliquait jamais (mauvais chemin) — sans lui l'image crashait au
+   premier chargement modèle (SyntaxError codegen Inductor). Aucun bump
+   de version de composant sur ces deux écarts.
 3. `ROCM_DIST_URL` (étape 2) pointe vers le tarball ROCm officiel sur
    `repo.amd.com/rocm/tarball-multi-arch/` (le dépôt stable AMD, pas un
    bucket CI) — à changer seulement si `stack-torch-gfx1151` bump sa

@@ -18,8 +18,13 @@
 # source (ABI-matched to our torch — the duplicate-symbol bug that made
 # earlier releases skip it was root-caused there; 0.3.0's first attempt
 # still mis-registered _cuda_version, 0.3.1 actually fixed it) and ships
-# an amdsmi wheel; both were worked around in this image before. This
-# image does not build anything — it only assembles.
+# an amdsmi wheel; both were worked around in this image before. 0.3.2
+# fixes the triton AttrsDescriptor.__repr__ patch that had never applied
+# on 0.1.0-0.3.1 (wrong path in vllm-packages.yaml, silently skipped) —
+# without it every model load crashed with a SyntaxError in an
+# Inductor-generated kernel (first real-hardware boot of the assembled
+# image, 2026-08-30 — see think/vllm/DEBUG.md). This image does not build
+# anything — it only assembles.
 #
 # ROCm 7.14 runtime comes from AMD's stable release repo (repo.amd.com,
 # not sebt3/therock-gfx1151): that repo's 3 local patches only fix
@@ -46,7 +51,7 @@ FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-ARG STACK_TORCH_TAG=0.3.1
+ARG STACK_TORCH_TAG=0.3.2
 ARG ROCM_DIST_URL=https://repo.amd.com/rocm/tarball-multi-arch/therock-dist-linux-gfx1151-7.14.0.tar.gz
 
 # 1. Runtime system deps. Originally "nothing compiles in this image, so
@@ -193,7 +198,7 @@ RUN mkdir -p /tmp/wheels && \
 # outright instead, but that broke vLLM's model registry — it imports
 # qwen3_vl.py while inspecting Qwen3_5MoeForConditionalGeneration (even
 # for a text-only checkpoint), and that chain needs
-# torchvision.transforms.v2 to exist. stack-torch-gfx1151 0.3.1 builds it
+# torchvision.transforms.v2 to exist. stack-torch-gfx1151 0.3.2 builds it
 # from source now (ABI-matched, _cuda_version registration fixed), so the
 # right move is to keep it and pin it.
 ARG VLLM_TAG=v0.28.0
