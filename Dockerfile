@@ -261,12 +261,20 @@ p.write_text(src)
 print(f"triton_utils shim: {applied}/{len(fixes)} blocks patched (0 is fine if 3.7.1 has them)")
 PYEOF
 
-# 7. Pre-tuned Triton fused-MoE kernel configs for gfx1151. Without these
-# vLLM falls back to an untuned default config ("Using default MoE config.
-# Performance might be sub-optimal!") on any expert layer AITER_MOE
-# doesn't cover — which, AITER being off, is all of them. Add new shapes
-# via benchmarks/kernels/benchmark_moe.py --tune (see README.md).
+# 7. Pre-tuned Triton fused-MoE kernel configs. Without these vLLM falls
+# back to an untuned default ("Using default MoE config. Performance might
+# be sub-optimal!") on every expert layer (AITER off → nothing covers
+# them), which measured ~4x slower decode on rennes (6.4 vs ~25 tok/s on
+# 0.21) — the whole alpha.9 perf regression (2026-09-02).
+# Filename must match `f"device_name={get_device_name()}"`: vLLM <=0.24
+# returned the gfx arch ("gfx1151"), 0.28 returns the marketing name
+# ("AMD Radeon 8060S" -> "AMD_Radeon_8060S"). Repo files are named for
+# 0.28; a gfx1151-named copy is dropped alongside for older/other vLLMs.
 COPY moe-configs/*.json /opt/venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/configs/
+RUN cd /opt/venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/configs && \
+    for f in *device_name=AMD_Radeon_8060S*.json; do \
+      cp -n "$f" "${f/device_name=AMD_Radeon_8060S/device_name=gfx1151}"; \
+    done && ls -1 *device_name=*
 
 # 7b. Import gate — fail the CI build here, not on the rennes GPU, if the
 # native lib graph doesn't load. No GPU at build: torch/vllm import fine

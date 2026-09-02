@@ -128,13 +128,19 @@ sans écrire de nouveau kernel.
 
 ⚠️ **vLLM est installé en wheel dans le venv (`/opt/venv/lib/python3.12/
 site-packages/vllm/`), pas cloné en source** — pas de `/opt/vllm/`, pas de
-`patch_strix.py`. `get_device_name()` retourne déjà `"gfx1151"` nativement.
-Pour retuner : récupérer `benchmarks/kernels/benchmark_moe.py` depuis le tag
-vLLM correspondant (`curl` depuis GitHub, comme les `requirements/*.txt` à
-l'étape 6 du `Dockerfile`). Les configs générées se déposent dans
-`moe-configs/` de ce repo (l'étape 7 du `Dockerfile` les copie dans
-`vllm/model_executor/layers/fused_moe/configs/`). Le reste de la recette
-reste valide dans son principe.
+`patch_strix.py`. Pour retuner : récupérer `benchmarks/kernels/benchmark_moe.py`
+depuis le tag vLLM correspondant (`curl` depuis GitHub, comme les
+`requirements/*.txt` à l'étape 6 du `Dockerfile`). Les configs générées se
+déposent dans `moe-configs/` de ce repo (l'étape 7 du `Dockerfile` les copie
+dans `vllm/model_executor/layers/fused_moe/configs/`).
+
+⚠️ **Nom de fichier des configs MoE** : doit matcher `device_name={get_device_name()}`.
+vLLM ≤ 0.24 renvoyait l'archi (`gfx1151`), **0.28 renvoie le nom marketing**
+(`AMD Radeon 8060S` → `AMD_Radeon_8060S`). Les fichiers du repo sont nommés
+pour 0.28 ; l'étape 7 dépose en plus une copie nommée `gfx1151` pour les
+vLLM plus anciens. Un mauvais nom = `WARNING [fused_moe.py] Using default
+MoE config. Performance might be sub-optimal!` et ~4x de perte en decode
+(mesuré sur rennes, alpha.9 : 6.4 vs ~25 tok/s sur 0.21).
 
 ### Recette (à répéter pour chaque nouveau shape MoE — nouveau modèle,
 ### nouveau `num_experts`/`moe_intermediate_size`, nouveau dtype de quant)

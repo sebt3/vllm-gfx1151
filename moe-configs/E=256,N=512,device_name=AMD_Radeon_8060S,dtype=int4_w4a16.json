@@ -1,5 +1,5 @@
 {
-    "triton_version": "3.7.0",
+    "triton_version": "3.7.1",
     "1": {
         "BLOCK_SIZE_M": 16,
         "BLOCK_SIZE_N": 32,
