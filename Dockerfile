@@ -92,22 +92,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       procps \
     && rm -rf /var/lib/apt/lists/*
 
-# 1b. MPI stub libs. The wheels.vllm.ai torch is built WITH MPI —
-# libtorch_cpu.so / libtorch_python.so / libtorch_global_deps.so carry a
-# hard NEEDED on libmpi.so.40 + libmpi_cxx.so.40, so `import torch` fails
-# in _load_global_deps without them (the old stack-torch build carried a
-# skip-distributed patch; the upstream wheel does not). We run a single
-# iGPU, TP=1, and vLLM's process group is nccl/gloo — MPI is never
-# initialised, so an empty .so with the right SONAME is enough to satisfy
-# the loader. Installing real libopenmpi3 instead drags in a conflicting
-# ROCm 5.x userspace (libamdhip64-5, libhsa-runtime64-1, libamd-comgr2,
-# libucx0...) via its RDMA/UCX tail — exactly what we don't want next to
-# the /opt/rocm 7.14 runtime.
-RUN for s in libmpi.so.40 libmpi_cxx.so.40; do \
-      printf 'void __mpi_stub(void){}\n' | \
-        gcc -x c -shared -fPIC -Wl,-soname,"$s" -o "/usr/local/lib/$s" - ; \
-    done && ldconfig
-
 # 2. ROCm 7.14 runtime for gfx1151, from AMD's stable release repo
 # (repo.amd.com/rocm/tarball-multi-arch — the actual apt/yum ROCm package
 # mirror, not a CI staging bucket; the other two AMD-hosted channels both
@@ -178,6 +162,36 @@ RUN mkdir -p /tmp/wheels && cd /tmp/wheels && \
     done && \
     uv pip install --no-deps /tmp/wheels/*.whl && \
     cd / && rm -rf /tmp/wheels
+
+# 5b. MPI stub. This torch is built WITH MPI: libtorch_cpu.so /
+# libtorch_python.so reference ~178 external MPI symbols (C MPI_*/MPIX_*,
+# the deprecated C++ MPI:: bindings, and OpenMPI's ompi_mpi_* datatype
+# objects) that must *resolve* at `from torch._C import *` — not merely
+# satisfy the libmpi.so.40 / libmpi_cxx.so.40 DT_NEEDED (an empty .so got
+# past _load_global_deps but then died on undefined symbol
+# _ZN3MPI8Datatype4FreeEv, 2026-09-02 rennes boot). Real libopenmpi3 drags
+# a conflicting ROCm 5.x / UCX userspace tail next to /opt/rocm 7.14.
+# Instead: enumerate every undefined MPI symbol across torch/lib and emit a
+# no-op definition for each into both SONAMEs. vLLM's process group is
+# nccl/gloo on a single iGPU — MPI_Init is never called, so no-ops are
+# safe. c10d::ProcessGroupMPII symbols are torch-internal (defined in
+# libtorch_cpu, U only in libtorch_python) — the ^MPI_/^_ZN3MPI/^ompi_
+# anchors exclude them so we don't interpose torch's own code.
+RUN set -eu; \
+    cd /opt/venv/lib/python3.12/site-packages/torch/lib; \
+    nm -D --undefined-only *.so 2>/dev/null \
+      | awk '$1=="U"{print $2}' \
+      | grep -E '^(MPI_|MPIX_|PMPI_|_ZN3MPI|_ZNK3MPI|ompi_)' \
+      | sort -u \
+      | awk '{print "void " $0 "(void){}"}' > /tmp/mpi_stub.c; \
+    echo "MPI stub: $(grep -c . /tmp/mpi_stub.c) symbols"; \
+    for s in libmpi.so.40 libmpi_cxx.so.40; do \
+      gcc -x c -shared -fPIC -Wl,-soname,"$s" -o "/usr/local/lib/$s" /tmp/mpi_stub.c; \
+    done; \
+    ldconfig; \
+    rm -f /tmp/mpi_stub.c; \
+    LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64:/opt/rocm/llvm/lib \
+      python -c "import ctypes, os; ctypes.CDLL('/opt/venv/lib/python3.12/site-packages/torch/lib/libtorch_cpu.so', mode=os.RTLD_NOW|os.RTLD_GLOBAL); print('libtorch_cpu.so: all symbols resolve (MPI stub complete)')"
 
 # 6. vLLM's own runtime dependencies. vLLM declares deps as `dynamic`,
 # loaded from requirements/common.txt + rocm.txt at its build time — the
@@ -253,6 +267,16 @@ PYEOF
 # doesn't cover — which, AITER being off, is all of them. Add new shapes
 # via benchmarks/kernels/benchmark_moe.py --tune (see README.md).
 COPY moe-configs/*.json /opt/venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/configs/
+
+# 7b. Import gate — fail the CI build here, not on the rennes GPU, if the
+# native lib graph doesn't load. No GPU at build: torch/vllm import fine
+# CPU-side (device init is lazy), so this catches missing .so / unresolved
+# symbols / the triton_utils shim regressing, which is where every failed
+# assembly so far actually broke.
+RUN LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64:/opt/rocm/llvm/lib \
+    python -c "import torch; print('torch', torch.__version__, torch.version.hip); \
+import triton; print('triton', triton.__version__); \
+import vllm; print('vllm', vllm.__version__)"
 
 # 8. Runtime env. AITER off (see header). The rest mirrors the last known
 # runtime flag set for this hardware.
