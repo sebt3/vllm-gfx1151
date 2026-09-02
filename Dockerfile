@@ -50,13 +50,14 @@
 # dist-package version; the ROCm/HIP SDK inside is ~7.2, matching the torch
 # wheel's reported hip 7.2.x.
 #
-# AITER is OFF by default in this image (VLLM_ROCM_USE_AITER=0). vLLM's own
-# gfx1151 AITER gating is still wrong upstream (_aiter_ops.py checks
-# on_gfx9(), rocm_aiter_fa.py checks on_mi3xx() — both False for gfx1151);
-# the fix for that lived in stack-torch's aiter-gate-gfx1x.patch /
-# aiter-fa-gfx1x-gate.patch, which are source patches we can no longer
-# apply to a prebuilt wheel. Prod already runs AITER=0. Revisit once those
-# gating fixes land upstream or are re-ported as site-packages patches.
+# AITER is ON since alpha.11. vLLM's upstream gfx1151 AITER gating is wrong
+# (_aiter_ops.py / rocm_aiter_fa.py gate on CDNA/MI3xx — False for
+# gfx1151); step 6d re-ports stack-torch's gate patches as site-packages
+# .py patches (patches/), adding the gfx1x sibling so AITER's
+# RDNA3.5-tuned Triton kernels engage. Same step fixes the FLA/GDN
+# autotune space (NVIDIA-shaped tiles overflow gfx1151's 64KB LDS). This
+# is the fix for the ~4 tok/s decode measured on the plain wheel
+# (2026-09-02, same-bandwidth DGX does 20-35 on a bigger model).
 
 FROM ubuntu:24.04
 
@@ -261,20 +262,34 @@ p.write_text(src)
 print(f"triton_utils shim: {applied}/{len(fixes)} blocks patched (0 is fine if 3.7.1 has them)")
 PYEOF
 
-# 7. Pre-tuned Triton fused-MoE kernel configs. Without these vLLM falls
-# back to an untuned default ("Using default MoE config. Performance might
-# be sub-optimal!") on every expert layer (AITER off → nothing covers
-# them), which measured ~4x slower decode on rennes (6.4 vs ~25 tok/s on
-# 0.21) — the whole alpha.9 perf regression (2026-09-02).
-# Filename must match `f"device_name={get_device_name()}"`: vLLM <=0.24
-# returned the gfx arch ("gfx1151"), 0.28 returns the marketing name
-# ("AMD Radeon 8060S" -> "AMD_Radeon_8060S"). Repo files are named for
-# 0.28; a gfx1151-named copy is dropped alongside for older/other vLLMs.
-COPY moe-configs/*.json /opt/venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/configs/
-RUN cd /opt/venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/configs && \
-    for f in *device_name=AMD_Radeon_8060S*.json; do \
-      cp -n "$f" "$(echo "$f" | sed 's/AMD_Radeon_8060S/gfx1151/')"; \
-    done && ls -1 *device_name=*
+# 6d. gfx1151 kernel patches (see patches/README.md). vLLM's Triton
+# kernels autotune over NVIDIA-shaped config spaces (64/128 tiles,
+# 3-4 stages) that overflow gfx1151's 64KB LDS — on rennes the stock wheel
+# decodes a Qwen3.5-MoE hybrid at ~4 tok/s while a same-bandwidth DGX does
+# 20-35 on a bigger model (2026-09-02). These route to AITER's
+# RDNA3.5-tuned Triton kernels + fix the FLA/GDN autotune space. Pure .py,
+# applied to installed site-packages, no rebuild. `--forward` makes a
+# re-applied patch a no-op instead of an error; NO --fuzz — a context
+# drift must fail the build loudly so we re-triage against the new wheel.
+COPY patches/*.patch /tmp/patches/
+RUN cd /opt/venv/lib/python3.12/site-packages && \
+    for p in \
+      fla-chunk-o-gfx1151 \
+      fla-chunk-delta-h-gfx1151 \
+      aiter-gate-gfx1x \
+      aiter-fa-gfx1x-gate \
+      aiter-fusion-skip-duplicates \
+    ; do \
+      echo "== applying ${p}" && \
+      patch -p1 --forward --no-backup-if-mismatch < "/tmp/patches/${p}.patch" ; \
+    done && rm -rf /tmp/patches
+
+# 7. Pre-tuned Triton fused-MoE configs: NOT baked in for now. The
+# moe-configs/ files were tuned 2026-07 against a different Triton and
+# measured *worse* on rennes than vLLM's built-in default (alpha.10). With
+# AITER_MOE on (step 6d) the expert layers should route to AITER anyway.
+# A fresh retune against this exact stack is owed once the kernel path is
+# settled — see README "Tuning des kernels MoE", then re-add a COPY here.
 
 # 7b. Import gate — fail the CI build here, not on the rennes GPU, if the
 # native lib graph doesn't load. No GPU at build: torch/vllm import fine
@@ -286,8 +301,15 @@ RUN LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64:/opt/rocm/llvm/lib \
 import triton; print('triton', triton.__version__); \
 import vllm; print('vllm', vllm.__version__)"
 
-# 8. Runtime env. AITER off (see header). The rest mirrors the last known
-# runtime flag set for this hardware.
+# 8. Runtime env.
+# AITER ON since alpha.11 — the step 6d gate patches make AITER's
+# RDNA3.5-tuned Triton kernels (MoE / MHA / RMSNorm / linear) engage on
+# gfx1151 instead of vLLM's generic NVIDIA-shaped ones. Granular flags all
+# on; drop individually to A/B a path. If AITER crashes at first forward,
+# fall back to VLLM_ROCM_USE_AITER=0 (granular flags become no-ops).
+# ⚠️ A Deployment that sets VLLM_ROCM_USE_AITER=0 in its own env OVERRIDES
+# this — the rennes Deployment did that; it must drop that line for
+# alpha.11 to mean anything.
 # ROCM_HOME/ROCM_PATH: aiter + Triton _find_rocm_home() checks. CC/CXX:
 # aiter's JIT build path defaults to bare cc/c++ which don't exist here —
 # point at the clang toolchain kept for Triton's JIT.
@@ -308,7 +330,11 @@ ENV LD_LIBRARY_PATH=/opt/rocm/lib:/opt/rocm/lib64:/opt/rocm/llvm/lib \
     FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE \
     VLLM_USE_TRITON_AWQ=1 \
     VLLM_DISABLE_COMPILE_CACHE=1 \
-    VLLM_ROCM_USE_AITER=0
+    VLLM_ROCM_USE_AITER=1 \
+    VLLM_ROCM_USE_AITER_MOE=1 \
+    VLLM_ROCM_USE_AITER_RMSNORM=1 \
+    VLLM_ROCM_USE_AITER_MHA=1 \
+    VLLM_ROCM_USE_AITER_LINEAR=1
 
 WORKDIR /opt
 CMD ["/bin/bash"]

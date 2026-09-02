@@ -1,0 +1,19 @@
+diff --git a/vllm/third_party/flash_linear_attention/ops/chunk_delta_h.py b/vllm/third_party/flash_linear_attention/ops/chunk_delta_h.py
+index eb1c3af..ecef747 100644
+--- a/vllm/third_party/flash_linear_attention/ops/chunk_delta_h.py
++++ b/vllm/third_party/flash_linear_attention/ops/chunk_delta_h.py
+@@ -217,8 +217,12 @@ def chunk_gated_delta_rule_fwd_kernel_h_blockdim64(
+                 b_v = b_v * tl.where(m_t, exp2(b_g_last - b_g), 0)[:, None]
+                 b_g_last = exp2(b_g_last)
+             else:
+-                b_v = b_v * tl.where(m_t, exp(b_g_last - b_g), 0)[:, None]
+-                b_g_last = exp(b_g_last)
++                # NOTE(gfx1151): Triton's HIP compiler fails to infer types
++                # for exp(scalar_bf16 - block_ptr_load_bf16). Cast to
++                # float32 first (also gives better precision for exp).
++                b_g_diff = b_g_last.to(tl.float32) - b_g.to(tl.float32)
++                b_v = b_v * tl.where(m_t, exp(b_g_diff), 0)[:, None]
++                b_g_last = exp(b_g_last.to(tl.float32))
+             b_h1 *= b_g_last
+             if K > 64:
+                 b_h2 *= b_g_last

@@ -1,0 +1,24 @@
+diff --git a/vllm/v1/attention/backends/rocm_aiter_fa.py b/vllm/v1/attention/backends/rocm_aiter_fa.py
+index 96dae0c..39608e7 100644
+--- a/vllm/v1/attention/backends/rocm_aiter_fa.py
++++ b/vllm/v1/attention/backends/rocm_aiter_fa.py
+@@ -776,12 +776,17 @@ class AiterFlashAttentionBackend(AttentionBackend):
+
+     @classmethod
+     def supports_compute_capability(cls, capability: DeviceCapability) -> bool:
+-        from vllm.platforms.rocm import get_cdna_version
++        from vllm.platforms.rocm import get_cdna_version, on_gfx1x
+
+         # DeviceCapability is currently created using torch.cuda.get_device_capability()
+         # which is known to be buggy on rocm systems. on CDNA uses amd-smi which is
+         # more reliable.
+-        return get_cdna_version() > 2
++        # gfx1x (e.g. gfx1151): this backend calls aiter.ops.triton.attention
++        # .mha_v3 / unified_attention - Triton kernels, not the CDNA-only CK
++        # path - and AITER's own fwd_prefill.py carries explicit RDNA 3.5
++        # tuning (vllm-packages.yaml aiter_support notes), so gfx1x is safe
++        # to accept here alongside CDNA.
++        return get_cdna_version() > 2 or on_gfx1x()
+
+     @classmethod
+     def supports_non_causal(cls) -> bool:
