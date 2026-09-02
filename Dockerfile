@@ -273,7 +273,7 @@ PYEOF
 COPY moe-configs/*.json /opt/venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/configs/
 RUN cd /opt/venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/configs && \
     for f in *device_name=AMD_Radeon_8060S*.json; do \
-      cp -n "$f" "${f/device_name=AMD_Radeon_8060S/device_name=gfx1151}"; \
+      cp -n "$f" "$(echo "$f" | sed 's/AMD_Radeon_8060S/gfx1151/')"; \
     done && ls -1 *device_name=*
 
 # 7b. Import gate — fail the CI build here, not on the rennes GPU, if the
