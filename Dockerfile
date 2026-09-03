@@ -262,15 +262,24 @@ p.write_text(src)
 print(f"triton_utils shim: {applied}/{len(fixes)} blocks patched (0 is fine if 3.7.1 has them)")
 PYEOF
 
-# 6d. gfx1151 kernel patches (see patches/README.md). vLLM's Triton
-# kernels autotune over NVIDIA-shaped config spaces (64/128 tiles,
-# 3-4 stages) that overflow gfx1151's 64KB LDS — on rennes the stock wheel
-# decodes a Qwen3.5-MoE hybrid at ~4 tok/s while a same-bandwidth DGX does
-# 20-35 on a bigger model (2026-09-02). These route to AITER's
-# RDNA3.5-tuned Triton kernels + fix the FLA/GDN autotune space. Pure .py,
-# applied to installed site-packages, no rebuild. `--forward` makes a
-# re-applied patch a no-op instead of an error; NO --fuzz — a context
-# drift must fail the build loudly so we re-triage against the new wheel.
+# 6d. gfx1151 kernel patches (see patches/README.md). Two families:
+#
+# FLA/GDN autotune + AITER Triton (alpha.11): vLLM's Triton kernels
+# autotune over NVIDIA-shaped config spaces (64/128 tiles, 3-4 stages)
+# that overflow gfx1151's 64KB LDS.
+#
+# RDNA3 native W4A16 HIP kernels (alpha.13): vLLM 0.28 ships a hand-written
+# RDNA3 WMMA int4 GEMM + fused-MoE kernel (moe_gptq_gemm_rdna3 et al.,
+# compiled for gfx1151 — verified in _rocm_C's fatbin), but both its
+# selectors gate on on_gfx1100() only ("Future: add RDNA4, CDNA..." — they
+# just never added RDNA3.5). rdna3-{moe,linear}-gfx1151 open those gates to
+# on_gfx1151(). Only reachable via the compressed-tensors path with a
+# *symmetric* W4A16 checkpoint (e.g. MIRALABS/Ornith-1.5-35B-A3B-W4A16-SYM)
+# — not the auto_awq path. This is the real int4 MoE decode kernel; the
+# Triton WNA16 path it replaces measured ~7 tok/s on rennes (alpha.12).
+#
+# Pure .py, applied to site-packages, no rebuild. `--forward` = re-apply is
+# a no-op; NO --fuzz — context drift must fail the build loudly.
 COPY patches/*.patch /tmp/patches/
 RUN cd /opt/venv/lib/python3.12/site-packages && \
     for p in \
@@ -279,6 +288,8 @@ RUN cd /opt/venv/lib/python3.12/site-packages && \
       aiter-gate-gfx1x \
       aiter-fa-gfx1x-gate \
       aiter-fusion-skip-duplicates \
+      rdna3-moe-gfx1151 \
+      rdna3-linear-gfx1151 \
     ; do \
       echo "== applying ${p}" && \
       patch -p1 --forward --no-backup-if-mismatch < "/tmp/patches/${p}.patch" ; \

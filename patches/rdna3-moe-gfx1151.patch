@@ -1,0 +1,28 @@
+--- a/vllm/model_executor/layers/quantization/compressed_tensors/compressed_tensors_moe/rocm_moe_rdna.py	2026-09-03 11:40:35.033290913 +0200
++++ b/vllm/model_executor/layers/quantization/compressed_tensors/compressed_tensors_moe/rocm_moe_rdna.py	2026-09-03 11:40:21.056344180 +0200
+@@ -18,11 +18,11 @@
+     if weight_quant.num_bits != 4:
+         return False
+ 
+-    from vllm.platforms.rocm import on_gfx1100
++    from vllm.platforms.rocm import on_gfx1100, on_gfx1151
+ 
+     # RDNA3 (gfx1100). Future: add RDNA4 (gfx12x), CDNA (gfx94x), etc.
+     return (
+-        on_gfx1100()
++        (on_gfx1100() or on_gfx1151())
+         and hasattr(torch.ops, "_rocm_C")
+         and hasattr(torch.ops._rocm_C, "moe_gptq_gemm_rdna3")
+     )
+@@ -30,9 +30,9 @@
+ 
+ def make_method(weight_quant, input_quant, moe_config):
+     """Create the native ROCm MoE method. Call only after is_supported()."""
+-    from vllm.platforms.rocm import on_gfx1100
++    from vllm.platforms.rocm import on_gfx1100, on_gfx1151
+ 
+-    if on_gfx1100():
++    if on_gfx1100() or on_gfx1151():
+         from .compressed_tensors_moe_wna16_rdna3 import (
+             CompressedTensorsWNA16RDNA3MoEMethod,
+         )

@@ -18,6 +18,8 @@ RDNA3.5-tuned Triton kernels and fix the FLA/GDN autotune space.
 | `aiter-gate-gfx1x` | `_aiter_ops.py` | add `is_aiter_found_and_supported_on_gfx1x()` sibling (mirrors the RDNA4 one) so `rocm_aiter_ops` registers on gfx1151 — AITER's Triton kernels, not CK |
 | `aiter-fa-gfx1x-gate` | `v1/attention/backends/rocm_aiter_fa.py` | `supports_compute_capability` accepts gfx1x alongside CDNA |
 | `aiter-fusion-skip-duplicates` | `compilation/passes/fusion/rocm_aiter_fusion.py` | `skip_duplicates=True` on the AITER RMSNorm+quant fusion patterns — without it `register_replacement` raises on duplicate patterns once AITER is on |
+| `rdna3-moe-gfx1151` | `.../compressed_tensors_moe/rocm_moe_rdna.py` | open the native RDNA3 fused-MoE selector (`moe_gptq_gemm_rdna3` WMMA HIP kernel) from `on_gfx1100()` to `on_gfx1100() or on_gfx1151()` — RDNA3.5 has the same WMMA ISA, the kernel is compiled for gfx1151 in `_rocm_C`. Only fires for **compressed-tensors symmetric W4A16** MoE checkpoints (not auto_awq) |
+| `rdna3-linear-gfx1151` | `kernels/linear/mixed_precision/rdna3_w4a16.py` | same `on_gfx1100()` → `+ on_gfx1151()` for the dense RDNA3 W4A16 linear kernel (`gptq_gemm_rdna3`), covering the non-expert int4 layers (full-attention q/k/v/o) |
 
 Dropped from the stack-torch set:
 - `fp8-support-gfx1x` — only widens `supports_fp8`; no FP8 accel on gfx1151, not pursuing FP8
