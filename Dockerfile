@@ -262,24 +262,28 @@ p.write_text(src)
 print(f"triton_utils shim: {applied}/{len(fixes)} blocks patched (0 is fine if 3.7.1 has them)")
 PYEOF
 
-# 6d. gfx1151 kernel patches (see patches/README.md). Two families:
+# 6d. gfx1151 site-packages patches (see patches/README.md). Pure .py, no
+# rebuild. `--forward` = re-apply is a no-op; NO --fuzz — context drift
+# must fail the build loudly so we re-triage against the new wheel.
 #
-# FLA/GDN autotune + AITER Triton (alpha.11): vLLM's Triton kernels
-# autotune over NVIDIA-shaped config spaces (64/128 tiles, 3-4 stages)
-# that overflow gfx1151's 64KB LDS.
+# Applied:
+#  - fla-chunk-{o,delta-h}-gfx1151 : FLA/GDN Triton autotune space fits
+#    gfx1151's 64KB LDS (upstream tiles are NVIDIA-shaped) + a bf16->f32
+#    cast the HIP Triton compiler needs.
+#  - aiter-{gate-gfx1x,fa-gfx1x-gate,fusion-skip-duplicates} : register
+#    AITER's RDNA3.5-tuned Triton ops on gfx1151.
+#  - ct-moe-wna16-intermediate-size-full : real 0.28 bug — Qwen3.5-MoE's
+#    MoE block doesn't pass intermediate_size_full to create_weights.
 #
-# RDNA3 native W4A16 HIP kernels (alpha.13): vLLM 0.28 ships a hand-written
-# RDNA3 WMMA int4 GEMM + fused-MoE kernel (moe_gptq_gemm_rdna3 et al.,
-# compiled for gfx1151 — verified in _rocm_C's fatbin), but both its
-# selectors gate on on_gfx1100() only ("Future: add RDNA4, CDNA..." — they
-# just never added RDNA3.5). rdna3-{moe,linear}-gfx1151 open those gates to
-# on_gfx1151(). Only reachable via the compressed-tensors path with a
-# *symmetric* W4A16 checkpoint (e.g. MIRALABS/Ornith-1.5-35B-A3B-W4A16-SYM)
-# — not the auto_awq path. This is the real int4 MoE decode kernel; the
-# Triton WNA16 path it replaces measured ~7 tok/s on rennes (alpha.12).
-#
-# Pure .py, applied to site-packages, no rebuild. `--forward` = re-apply is
-# a no-op; NO --fuzz — context drift must fail the build loudly.
+# NOT applied — rdna3-{moe,linear}-gfx1151 (patches/ still ships them):
+# vLLM 0.28's hand-written RDNA3 WMMA int4 MoE kernel (moe_gptq_gemm_rdna3,
+# compiled for gfx1151 in _rocm_C). The gate patch works — the method
+# engages on gfx1151 — but the kernel produces garbage output there
+# (written/tested for gfx1100; correctness bug in csrc/rocm/q_gemm_rdna3.cu
+# on RDNA3.5). Confirmed with g32 (MIRALABS Ornith) and g128 (88plug
+# Qwen3.6) checkpoints on rennes 2026-09-03. Re-enable only after a
+# csrc-level fix + rebuild of _rocm_C. Leaving them off means a
+# compressed-tensors deploy falls back to the correct (slow) Triton WNA16.
 COPY patches/*.patch /tmp/patches/
 RUN cd /opt/venv/lib/python3.12/site-packages && \
     for p in \
@@ -289,11 +293,6 @@ RUN cd /opt/venv/lib/python3.12/site-packages && \
       aiter-fa-gfx1x-gate \
       aiter-fusion-skip-duplicates \
       ct-moe-wna16-intermediate-size-full \
-      # rdna3-{moe,linear}-gfx1151: DISABLED — the native RDNA3 WMMA int4
-      # kernel engages on gfx1151 (gate patch works) but produces garbage
-      # output (written/tested for gfx1100; a gfx1151 correctness bug in
-      # csrc/rocm/q_gemm_rdna3.cu). Confirmed with g32 and g128 checkpoints
-      # on rennes (2026-09-03). .patch files kept for a future csrc fix.
     ; do \
       echo "== applying ${p}" && \
       patch -p1 --forward --no-backup-if-mismatch < "/tmp/patches/${p}.patch" ; \
