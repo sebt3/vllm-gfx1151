@@ -284,12 +284,21 @@ RUN cd /opt/venv/lib/python3.12/site-packages && \
       patch -p1 --forward --no-backup-if-mismatch < "/tmp/patches/${p}.patch" ; \
     done && rm -rf /tmp/patches
 
-# 7. Pre-tuned Triton fused-MoE configs: NOT baked in for now. The
-# moe-configs/ files were tuned 2026-07 against a different Triton and
-# measured *worse* on rennes than vLLM's built-in default (alpha.10). With
-# AITER_MOE on (step 6d) the expert layers should route to AITER anyway.
-# A fresh retune against this exact stack is owed once the kernel path is
-# settled — see README "Tuning des kernels MoE", then re-add a COPY here.
+# 7. Pre-tuned Triton fused-MoE config for the Qwen3.5-MoE shape
+# (E=256, N=512, int4_w4a16). Retuned on the actual rennes gfx1151 with
+# this exact vLLM/Triton 3.7.1 (benchmark_moe.py --tune, batch 1/2/4/8,
+# ~2h14, 2026-09-03) — the earlier 2026-07 values were tuned against a
+# different Triton and measured worse than vLLM's default. AITER has no
+# int4 MoE kernel for gfx1151 (its MoE kernels are fp8/int8/bf16), so the
+# AWQ experts run this Triton WNA16 path regardless of AITER_MOE.
+# Filename must match `device_name={get_device_name()}` — 0.28 returns the
+# marketing name "AMD Radeon 8060S"; a gfx1151-named copy is dropped for
+# older/other vLLMs.
+COPY moe-configs/*.json /opt/venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/configs/
+RUN cd /opt/venv/lib/python3.12/site-packages/vllm/model_executor/layers/fused_moe/configs && \
+    for f in *device_name=AMD_Radeon_8060S*.json; do \
+      cp -n "$f" "$(echo "$f" | sed 's/AMD_Radeon_8060S/gfx1151/')"; \
+    done && ls -1 *device_name=*8060S* *device_name=*gfx1151*
 
 # 7b. Import gate — fail the CI build here, not on the rennes GPU, if the
 # native lib graph doesn't load. No GPU at build: torch/vllm import fine
