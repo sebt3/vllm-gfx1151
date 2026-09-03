@@ -288,9 +288,12 @@ RUN cd /opt/venv/lib/python3.12/site-packages && \
       aiter-gate-gfx1x \
       aiter-fa-gfx1x-gate \
       aiter-fusion-skip-duplicates \
-      rdna3-moe-gfx1151 \
-      rdna3-linear-gfx1151 \
       ct-moe-wna16-intermediate-size-full \
+      # rdna3-{moe,linear}-gfx1151: DISABLED — the native RDNA3 WMMA int4
+      # kernel engages on gfx1151 (gate patch works) but produces garbage
+      # output (written/tested for gfx1100; a gfx1151 correctness bug in
+      # csrc/rocm/q_gemm_rdna3.cu). Confirmed with g32 and g128 checkpoints
+      # on rennes (2026-09-03). .patch files kept for a future csrc fix.
     ; do \
       echo "== applying ${p}" && \
       patch -p1 --forward --no-backup-if-mismatch < "/tmp/patches/${p}.patch" ; \
