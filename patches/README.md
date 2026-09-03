@@ -20,6 +20,7 @@ RDNA3.5-tuned Triton kernels and fix the FLA/GDN autotune space.
 | `aiter-fusion-skip-duplicates` | `compilation/passes/fusion/rocm_aiter_fusion.py` | `skip_duplicates=True` on the AITER RMSNorm+quant fusion patterns — without it `register_replacement` raises on duplicate patterns once AITER is on |
 | `rdna3-moe-gfx1151` | `.../compressed_tensors_moe/rocm_moe_rdna.py` | open the native RDNA3 fused-MoE selector (`moe_gptq_gemm_rdna3` WMMA HIP kernel) from `on_gfx1100()` to `on_gfx1100() or on_gfx1151()` — RDNA3.5 has the same WMMA ISA, the kernel is compiled for gfx1151 in `_rocm_C`. Only fires for **compressed-tensors symmetric W4A16** MoE checkpoints (not auto_awq) |
 | `rdna3-linear-gfx1151` | `kernels/linear/mixed_precision/rdna3_w4a16.py` | same `on_gfx1100()` → `+ on_gfx1151()` for the dense RDNA3 W4A16 linear kernel (`gptq_gemm_rdna3`), covering the non-expert int4 layers (full-attention q/k/v/o) |
+| `ct-moe-wna16-intermediate-size-full` | `.../compressed_tensors_moe_wna16.py` | vLLM 0.28 bug: `Qwen3NextSparseMoeBlock` doesn't pass `intermediate_size_full` into `create_weights`' extra attrs → `KeyError`. Default it to `intermediate_size_per_partition` (identical for TP=1 / `actorder=null`). Not gfx1151-specific — any 0.28 image hits it with a compressed-tensors Qwen3.5-MoE checkpoint |
 
 Dropped from the stack-torch set:
 - `fp8-support-gfx1x` — only widens `supports_fp8`; no FP8 accel on gfx1151, not pursuing FP8

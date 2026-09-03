@@ -290,6 +290,7 @@ RUN cd /opt/venv/lib/python3.12/site-packages && \
       aiter-fusion-skip-duplicates \
       rdna3-moe-gfx1151 \
       rdna3-linear-gfx1151 \
+      ct-moe-wna16-intermediate-size-full \
     ; do \
       echo "== applying ${p}" && \
       patch -p1 --forward --no-backup-if-mismatch < "/tmp/patches/${p}.patch" ; \
